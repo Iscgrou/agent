@@ -7,6 +7,9 @@ import {
     generateSelfReflectionPrompt,
     generateTestGenerationPrompt,
     generateCodeAnalysisPrompt,
+    generateRepoLevelAnalysisPrompt,
+    generateFileLevelAnalysisPrompt,
+    generateDependencyAnalysisPrompt,
     injectContext
 } from '../src/core/prompt-templates.js';
 
@@ -284,6 +287,125 @@ describe('Test Generation Prompt', () => {
         });
         expect(prompt).toContain('login.js');
         expect(prompt).toContain('validation.js');
+    });
+});
+
+describe('Repository Analysis Prompts', () => {
+    describe('Repository Level Analysis Prompt', () => {
+        const mockContext = {
+            manifestFiles: [
+                { 
+                    path: 'package.json',
+                    content: '{"name": "test-project", "dependencies": {"react": "^17.0.0"}}',
+                    type: 'package.json'
+                }
+            ],
+            directoryStructure: 'Sample of files/directories:\nsrc/index.js\nsrc/components/App.js',
+            userModificationRequest: 'Add authentication feature',
+            entryPointHints: ['src/index.js']
+        };
+
+        test('should generate valid repository level analysis prompt', () => {
+            const prompt = generateRepoLevelAnalysisPrompt(mockContext);
+            expect(prompt).toContain('package.json');
+            expect(prompt).toContain('src/index.js');
+            expect(prompt).toContain('Add authentication feature');
+            expect(prompt).toContain('JSON');
+            expect(prompt).toContain('mainLanguages');
+            expect(prompt).toContain('frameworksAndLibraries');
+            expect(prompt).toContain('architecturalPatternGuess');
+        });
+
+        test('should handle missing manifest files', () => {
+            const prompt = generateRepoLevelAnalysisPrompt({
+                ...mockContext,
+                manifestFiles: []
+            });
+            expect(prompt).toContain('directoryStructure');
+            expect(prompt).toContain('JSON');
+        });
+
+        test('should include modification request context', () => {
+            const prompt = generateRepoLevelAnalysisPrompt({
+                ...mockContext,
+                userModificationRequest: 'Upgrade React version'
+            });
+            expect(prompt).toContain('Upgrade React version');
+            expect(prompt).toContain('initialAnalysisForModification');
+        });
+    });
+
+    describe('File Level Analysis Prompt', () => {
+        const mockContext = {
+            filePath: 'src/components/Auth.js',
+            fileContent: 'export function Auth() { /* code */ }',
+            fileType: 'js',
+            modificationGoalFromUser: 'Add OAuth support',
+            repositoryContextOverview: {
+                mainLanguages: ['JavaScript'],
+                frameworksAndLibraries: ['React'],
+                architecture: 'Component-based'
+            },
+            focusOnModificationPoints: true
+        };
+
+        test('should generate valid file level analysis prompt', () => {
+            const prompt = generateFileLevelAnalysisPrompt(mockContext);
+            expect(prompt).toContain('src/components/Auth.js');
+            expect(prompt).toContain('Add OAuth support');
+            expect(prompt).toContain('JSON');
+            expect(prompt).toContain('primaryPurposeSummary');
+            expect(prompt).toContain('relevanceToUserModificationGoal');
+        });
+
+        test('should handle missing file type', () => {
+            const prompt = generateFileLevelAnalysisPrompt({
+                ...mockContext,
+                fileType: null
+            });
+            expect(prompt).toContain('src/components/Auth.js');
+            expect(prompt).toContain('JSON');
+        });
+
+        test('should include repository context', () => {
+            const prompt = generateFileLevelAnalysisPrompt(mockContext);
+            expect(prompt).toContain('React');
+            expect(prompt).toContain('Component-based');
+        });
+    });
+
+    describe('Dependency Analysis Prompt', () => {
+        const mockContext = {
+            manifestContent: '{"dependencies": {"react": "^17.0.0"}, "devDependencies": {"jest": "^27.0.0"}}',
+            manifestType: 'package.json'
+        };
+
+        test('should generate valid dependency analysis prompt', () => {
+            const prompt = generateDependencyAnalysisPrompt(mockContext);
+            expect(prompt).toContain('package.json');
+            expect(prompt).toContain('JSON');
+            expect(prompt).toContain('mainLanguageOrPlatform');
+            expect(prompt).toContain('buildConfiguration');
+            expect(prompt).toContain('dependencies');
+        });
+
+        test('should handle different manifest types', () => {
+            const prompt = generateDependencyAnalysisPrompt({
+                manifestContent: '<project><dependencies><dependency><groupId>org.springframework</groupId></dependency></dependencies></project>',
+                manifestType: 'pom.xml'
+            });
+            expect(prompt).toContain('pom.xml');
+            expect(prompt).toContain('JSON');
+        });
+
+        test('should handle invalid manifest content gracefully', () => {
+            const prompt = generateDependencyAnalysisPrompt({
+                manifestContent: 'Invalid content',
+                manifestType: 'package.json'
+            });
+            expect(prompt).toContain('Invalid content');
+            expect(prompt).toContain('JSON');
+        });
     });
 });
 

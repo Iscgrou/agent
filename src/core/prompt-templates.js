@@ -692,3 +692,228 @@ Schema for your JSON response:
     prompt += `${JSON_OUTPUT_INSTRUCTION}`;
     return prompt;
 }
+
+// --- New Prompts for Repository Analysis ---
+
+/**
+ * Generates a prompt for Vertex AI to perform a high-level analysis of a repository.
+ * @param {object} context
+ * @param {Array<{path: string, content: string, type: string}>} context.manifestFiles - Content of manifest files (e.g., package.json, pom.xml).
+ * @param {string} context.directoryStructure - A textual representation of the directory structure (e.g., output of 'tree' or ls -R).
+ * @param {string} context.userModificationRequest - The user's original request regarding modifications.
+ * @param {string[]} [context.entryPointHints] - Optional hints for likely entry points of the application.
+ * @returns {string} - The prompt string.
+ */
+export function generateRepoLevelAnalysisPrompt(context) {
+    const { manifestFiles, directoryStructure, userModificationRequest, entryPointHints = [] } = context;
+
+    let manifestContentString = "Manifest Files Content (truncated if long):\n";
+    if (manifestFiles && manifestFiles.length > 0) {
+        manifestFiles.forEach(mf => {
+            manifestContentString += `--- File: ${mf.path} (Type: ${mf.type}) ---\n${(mf.content || '').substring(0, 1500)}\n${(mf.content || '').length > 1500 ? '...\n' : ''}---\n`;
+        });
+    } else {
+        manifestContentString = "No manifest files provided for analysis.\n";
+    }
+
+
+    const outputSchemaDescription = `
+Schema for your JSON response:
+{
+  "repositoryType": "High-level type (e.g., 'Node.js Web Service', 'React Frontend App', 'Python CLI Tool', 'Java Library'). Infer if possible.",
+  "mainLanguages": ["Primary programming language(s) detected, e.g., 'JavaScript', 'Python', 'Java'. Include version if apparent from manifests."],
+  "frameworksAndLibraries": ["Key frameworks and major libraries identified, e.g., 'React', 'Express.js', 'Spring Boot', 'Django', 'TensorFlow'. Be specific."],
+  "buildSystemAndTools": ["Build system (e.g., 'npm', 'maven', 'gradle', 'pip/setuptools') and key development/build tools identified from manifests or typical project structure."],
+  "architecturalPatternGuess": "Educated guess about the primary architectural pattern (e.g., 'MVC', 'Microservices', 'Monolith', 'Event-Driven', 'Layered'). State 'Undetermined' if unclear.",
+  "keyComponentsOrModules": [ // List 3-5 most important inferred components.
+    {
+      "name": "Descriptive name of a key component/module/package identified.",
+      "purpose": "Its primary responsibility or role in the system.",
+      "estimated_location_paths": ["Array of likely directory path(s) or key file(s) for this component based on structure and manifests."]
+    }
+  ],
+  "potentialEntryPoints": ["Array of likely main entry point files for the application (e.g., 'src/index.js', 'app/main.py'). Consider hints: ${entryPointHints.join(', ')} if provided, otherwise infer."],
+  "initialAnalysisForModification": {
+    "understandingOfUserRequest": "Briefly re-state your understanding of what the user wants to modify or achieve: '${userModificationRequest}'.",
+    "suggestedFilesToInspectFurtherForModification": ["Based on the user's modification request and your repository analysis, list up to 5-7 specific file paths that seem MOST relevant to investigate further. Prioritize effectively."],
+    "keyDependenciesRelatedToModification": ["List any specific dependencies (from manifest analysis) that might be directly involved or affected by the user's modification request."],
+    "potentialChallengesOrQuestionsForModification": ["Any immediate challenges, ambiguities, or questions you foresee in fulfilling the user's modification request based on this high-level repo view."]
+  },
+  "overallConfidence": "Your confidence in this high-level analysis ('High', 'Medium', 'Low')."
+}
+`;
+
+    return `
+You are an expert AI Software Architect and Code Analyzer.
+Your task is to perform a high-level analysis of a software repository based on its manifest files and directory structure to understand its nature and identify key areas relevant to a user's modification request.
+
+User's Modification Request: "${userModificationRequest}"
+
+${manifestContentString}
+
+Directory Structure Overview (may be partial):
+\`\`\`
+${(directoryStructure || 'Not provided').substring(0, 2000)}
+${(directoryStructure || '').length > 2000 ? '... (structure truncated)\n' : ''}\`\`\`
+${entryPointHints.length > 0 ? `\nConsider these hints for entry points: ${entryPointHints.join(', ')}\n` : ''}
+
+Based on ALL the provided information, analyze the repository comprehensively.
+
+${outputSchemaDescription}
+
+${JSON_OUTPUT_INSTRUCTION}
+${COMMON_ERROR_HANDLING_INSTRUCTION}
+`;
+}
+
+/**
+ * Generates a prompt for Vertex AI to analyze a specific file's content in detail.
+ * @param {object} context
+ * @param {string} context.filePath - The path of the file being analyzed.
+ * @param {string} context.fileContent - The full content of the file.
+ * @param {string} [context.fileType] - Detected or guessed file type/language (e.g., 'javascript', 'python', 'java').
+ * @param {string} context.modificationGoalFromUser - The overall goal the user wants to achieve with modifications to the repository.
+ * @param {object} [context.repositoryContextOverview] - High-level overview of the repository (output from generateRepoLevelAnalysisPrompt).
+ * @param {boolean} [context.focusOnModificationPoints=false] - If true, prioritize identifying specific modification points.
+ * @returns {string}
+ */
+export function generateFileLevelAnalysisPrompt(context) {
+    const { filePath, fileContent, fileType, modificationGoalFromUser, repositoryContextOverview, focusOnModificationPoints = false } = context;
+
+    const outputSchemaDescription = `
+Schema for your JSON response:
+{
+  "filePath": "${filePath}",
+  "fileTypeConfirmed": "Your confirmation or best guess of the file's language/type (e.g., 'JavaScript (React Component)', 'Python (Data Processing Script)', 'Java (Spring Controller)').",
+  "primaryPurposeSummary": "A concise (1-2 sentence) description of this file's main role and functionality.",
+  "keyElements": [ // Describe 2-4 most important functions, classes, components, or configuration blocks in this file.
+    {
+      "elementName": "Name of main function, class, or component (e.g., 'processUserData', 'UserProfileComponent').",
+      "elementType": "'function', 'class', 'react_component', 'configuration_block', 'module_exports', etc.",
+      "description": "Brief summary of its specific purpose within this file.",
+      "key_details_or_signature": "e.g., 'function(data, options)', 'Props: {user, onSave}', 'Exports: {getData, setData}' (briefly)."
+    }
+  ],
+  "internalDependenciesWithinFile": ["List names of key functions/variables defined *within this file* that are used by other parts of this same file."],
+  "externalDependenciesImported": ["List key modules or libraries imported/used directly *within this file* (e.g., 'express', 'lodash.get', './utils/calculations')."],
+  "elementsExported": ["List key functions, classes, or variables explicitly exported by this file for use by other modules."],
+  "relevanceToUserModificationGoal": {
+    "isLikelyRelevant": "boolean (true if this file seems relevant to the user's goal: '${modificationGoalFromUser}')",
+    "relevanceReasoning": "Explain concisely why or why not it's relevant.",
+    "specificModificationSuggestions": [ // If relevant, provide concrete, actionable suggestions. Be very specific.
+      {
+        "locationInFile": "Describe specific location (e.g., 'function calculateTotal()', 'around line 72 within the for-loop', 'the UserSchema definition').",
+        "currentBehaviorIndicator": "A very short (1-2 line) snippet of the *current* code at that point, or a description of current logic.",
+        "suggestedChangeType": "'add_code', 'modify_logic', 'remove_code', 'refactor_section', 'update_dependency_call'.",
+        "detailedChangeDescription": "A clear, step-by-step description of the exact change needed to address the user's modification goal.",
+        "exampleCodeModification": "Optional: A short illustrative snippet of how the code *might* look after your suggested change."
+      }
+    ]
+  },
+  "codeQualityNotes": [ // Provide 1-3 brief, actionable notes.
+    { "aspect": "'Clarity/Readability'", "observation": "e.g., 'Code is well-commented and uses meaningful variable names.' or 'Nesting level in function X is high, consider refactoring.'"},
+    { "aspect": "'ErrorHandling'", "observation": "e.g., 'Robust try-catch blocks for API calls.' or 'Missing input validation for parameter Y.'"},
+    { "aspect": "'PotentialImprovement'", "observation": "e.g., 'No obvious performance bottlenecks observed.' or 'Consider using a more efficient algorithm for Z.'"}
+  ]
+}
+`;
+    let repoContextSummaryString = "";
+    if (repositoryContextOverview) {
+        repoContextSummaryString = `
+This file is part of a larger repository, with the following general characteristics:
+  Repository Type: ${repositoryContextOverview.repositoryType || 'N/A'}
+  Main Languages: ${(repositoryContextOverview.mainLanguages || []).join(', ') || 'N/A'}
+  Key Frameworks/Libraries: ${(repositoryContextOverview.frameworksAndLibraries || []).join(', ') || 'N/A'}
+User's Overall Modification Goal for the Repository: "${modificationGoalFromUser}"
+${focusOnModificationPoints ? "Your primary focus is to identify specific points for modification in this file related to the user's goal.\n" : ""}
+`;
+    }
+
+    return `
+You are an expert AI Code Analyst. Your task is to meticulously analyze the provided source code file.
+${repoContextSummaryString}
+File Path: ${filePath}
+${fileType ? `Assumed File Type/Language: ${fileType}\n` : ''}
+
+File Content:
+\`\`\`${fileType || ''}
+${fileContent.substring(0, 8000)} 
+${fileContent.length > 8000 ? "\n... (File content truncated for brevity in this prompt) ...\n" : ""}
+\`\`\`
+
+Analyze this file thoroughly, keeping the user's overall modification goal in mind.
+
+${outputSchemaDescription}
+
+${JSON_OUTPUT_INSTRUCTION}
+${COMMON_ERROR_HANDLING_INSTRUCTION}
+`;
+}
+
+/**
+ * Generates a prompt for Vertex AI to analyze manifest files (e.g., package.json, pom.xml).
+ * @param {object} context
+ * @param {string} context.manifestContent - The content of the manifest file.
+ * @param {string} context.manifestType - e.g., 'package.json', 'pom.xml', 'build.gradle', 'requirements.txt'.
+ * @returns {string}
+ */
+export function generateDependencyAnalysisPrompt(context) {
+    const { manifestContent, manifestType } = context;
+
+    const outputSchemaDescription = `
+Schema for your JSON response:
+{
+  "manifestType": "${manifestType}",
+  "projectName": "Project name if specified in the manifest (e.g., from 'name' field in package.json), otherwise null.",
+  "projectVersion": "Project version if specified, otherwise null.",
+  "description": "Project description if available in the manifest, otherwise null.",
+  "mainLanguageOrPlatform": "e.g., 'Node.js', 'Java', 'Python'. Infer based on manifest type and common conventions.",
+  "dependencies": { // List key dependencies (top 5-10 for each category if many)
+    "runtime": [ { "name": "string", "version_specifier": "string", "purpose_guess": "string (e.g., 'Web framework', 'HTTP client')" } ],
+    "development": [ { "name": "string", "version_specifier": "string", "purpose_guess": "string (e.g., 'Testing framework', 'Linter')" } ],
+    "peer": [ { "name": "string", "version_specifier": "string", "purpose_guess": "string" } ]
+    // Add "optionalDependencies", "bundleDependencies" if relevant for package.json
+    // For pom.xml, list <dependencies> under "runtime" and <plugins> under "buildTools" or similar.
+  },
+  "buildConfiguration": {
+    "buildToolsAndPlugins": ["List build tools or plugins mentioned or implied (e.g., 'webpack', 'maven-compiler-plugin', 'babel')."],
+    "keyScriptsOrGoals": { // e.g., from package.json scripts or Maven/Gradle tasks
+      "build": "Command for building the project (e.g., 'npm run build', 'mvn package')",
+      "start": "Command for starting the application locally (e.g., 'npm start', 'java -jar app.jar')",
+      "test": "Command for running tests (e.g., 'npm test', 'mvn test')"
+      // Add other common scripts if identifiable
+    },
+    "primaryOutputArtifactsGuess": ["Educated guess of primary build artifacts, e.g., 'dist/bundle.js', 'target/app.jar', 'build/libs/library.aar'."]
+  },
+  "engineOrPlatformRequirements": { // e.g., Node.js 'engines' field, Java version from <maven.compiler.source>
+    // "engine_name (e.g., node, npm, java)": "version_specifier (e.g., '>=16.0.0', '11')"
+  },
+  "otherExtractedInfo": {
+    "main_entry_file_guess": "If specified (e.g., 'main' in package.json) or inferable, otherwise null.",
+    "license_type": "License if specified (e.g., 'MIT', 'Apache-2.0'), otherwise null.",
+    "repository_url_from_manifest": "Git repository URL if specified in the manifest, otherwise null."
+  }
+}
+`;
+
+    return `
+You are an AI assistant specialized in analyzing software project manifest files like package.json, pom.xml, build.gradle, or requirements.txt.
+Your task is to meticulously analyze the following manifest file content and extract key information.
+
+Manifest File Type: ${manifestType}
+
+Manifest Content (may be truncated if very long):
+\`\`\`${manifestType.includes('json') ? 'json' : manifestType.includes('xml') ? 'xml' : manifestType.includes('gradle') ? 'gradle' : ''}
+${(manifestContent || '').substring(0, 6000)}
+${(manifestContent || '').length > 6000 ? "\n... (Manifest content truncated) ...\n" : ""}
+\`\`\`
+
+Extract information such as project name, version, description, main language/platform, dependencies (differentiating between runtime, development, etc.), build tools, key scripts or build goals, engine/platform requirements, and any other significant metadata.
+For dependencies, try to infer the purpose of key ones.
+
+${outputSchemaDescription}
+
+${JSON_OUTPUT_INSTRUCTION}
+${COMMON_ERROR_HANDLING_INSTRUCTION}
+`;
+}

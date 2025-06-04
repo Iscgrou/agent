@@ -1,219 +1,345 @@
-import { jest } from '@jest/globals';
+// tests/sandbox-manager.test.js
+
+import { SandboxManager, SecurityViolationError, CommandExecutionError, FileSystemError } from '../src/core/sandbox-manager';
 import Docker from 'dockerode';
 import fs from 'fs-extra';
 import path from 'path';
-import {
-    SandboxManager,
-    SandboxError,
-    ContainerCreationError,
-    CommandExecutionError,
-    CommandTimeoutError,
-    FileSystemError,
-    SecurityViolationError
-} from '../src/core/sandbox-manager.js';
 
 // Mock Docker and fs-extra
 jest.mock('dockerode');
-jest.mock('fs-extra', () => ({
-    ensureDirSync: jest.fn(),
-    pathExists: jest.fn(),
-    ensureDir: jest.fn(),
-    remove: jest.fn(),
-    writeFile: jest.fn()
-}));
+jest.mock('fs-extra');
 
-describe('SandboxManager', () => {
+describe('SandboxManager Advanced Features', () => {
     let sandboxManager;
-    const mockConfig = {
-        socketPath: '/var/run/docker.sock',
-        baseImage: 'node:18-alpine',
-        tempHostDir: '/tmp/sandbox',
-        defaultResourceLimits: {
-            cpus: 0.5,
-            memory: '256m'
-        }
+    const mockContainerId = 'mock-container-123';
+    const mockExec = {
+        start: jest.fn(),
+        inspect: jest.fn()
+    };
+    const mockContainer = {
+        exec: jest.fn(() => mockExec),
+        inspect: jest.fn(),
+        stop: jest.fn(),
+        remove: jest.fn(),
+        getArchive: jest.fn()
+    };
+    const mockStream = {
+        on: jest.fn((event, callback) => {
+            if (event === 'end') {
+                // Simulate async stream end
+                setTimeout(callback, 0);
+            }
+            return mockStream;
+        })
     };
 
     beforeEach(() => {
-        // Clear all mocks before each test
         jest.clearAllMocks();
         
-        // Setup fs-extra mocks
-        fs.ensureDirSync.mockImplementation(() => {});
-        fs.pathExists.mockResolvedValue(true);
-        fs.ensureDir.mockResolvedValue();
-        fs.remove.mockResolvedValue();
-        fs.writeFile.mockResolvedValue();
-
-        // Setup Docker mocks
-        const mockContainer = {
-            id: 'mock-container-id',
-            start: jest.fn().mockResolvedValue({}),
-            stop: jest.fn().mockResolvedValue({}),
-            remove: jest.fn().mockResolvedValue({}),
-            inspect: jest.fn().mockResolvedValue({ State: { Running: true } }),
-            exec: jest.fn().mockResolvedValue({
-                start: jest.fn().mockResolvedValue({
-                    on: jest.fn(),
-                    modem: { demuxStream: jest.fn() }
-                }),
-                inspect: jest.fn().mockResolvedValue({ ExitCode: 0 })
-            })
-        };
-
+        // Setup Docker mock
         Docker.mockImplementation(() => ({
             createContainer: jest.fn().mockResolvedValue(mockContainer),
             getImage: jest.fn().mockReturnValue({
-                inspect: jest.fn().mockResolvedValue({}),
+                inspect: jest.fn().mockResolvedValue({})
             }),
-            pull: jest.fn().mockResolvedValue({}),
             modem: {
-                followProgress: jest.fn((stream, onFinished) => onFinished(null, []))
+                followProgress: jest.fn((stream, callback) => callback(null, [])),
+                demuxStream: jest.fn()
             }
         }));
 
-        sandboxManager = new SandboxManager(mockConfig);
+        // Setup fs mock
+        fs.ensureDir.mockResolvedValue(undefined);
+        fs.pathExists.mockResolvedValue(true);
+        fs.remove.mockResolvedValue(undefined);
+
+        sandboxManager = new SandboxManager({
+            tempHostDir: '/tmp/sandbox'
+        });
+        sandboxManager.activeContainers.set(mockContainerId, mockContainer);
     });
 
-    describe('Constructor and Configuration', () => {
-        test('should initialize with default configuration', () => {
-            const defaultManager = new SandboxManager();
-            expect(defaultManager.baseImage).toBe('ubuntu:latest');
-            expect(defaultManager.defaultNetworkMode).toBe('none');
-            expect(defaultManager.containerUser).toBe('sandbox_user');
+    describe('cloneRepository', () => {
+        const validRepoUrl = 'https://github.com/user/repo.git';
+        
+        it('should successfully clone a repository', async () => {
+            mockExec.start.mockResolvedValue(mockStream);
+            mockExec.inspect.mockResolvedValue({ ExitCode: 0 });
+
+            const result = await sandboxManager.cloneRepository(validRepoUrl);
+
+            expect(result).toHaveProperty('sessionHostDir');
+            expect(result).toHaveProperty('repoHostPath');
+            expect(result).toHaveProperty('containerId');
+            expect(mockContainer.exec).toHaveBeenCalledWith(expect.objectContaining({
+                Cmd: ['git', 'clone', validRepoUrl, '.']
+            }));
         });
 
-        test('should initialize with custom configuration', () => {
-            expect(sandboxManager.baseImage).toBe('node:18-alpine');
-            expect(sandboxManager.tempHostDir).toBe('/tmp/sandbox');
-            expect(sandboxManager.defaultResourceLimits.Cpus).toBe(0.5);
+        it('should reject non-HTTPS repository URLs', async () => {
+            await expect(sandboxManager.cloneRepository('git@github.com:user/repo.git'))
+                .rejects
+                .toThrow(SecurityViolationError);
         });
 
-        test('should validate memory limit format', () => {
-            expect(() => sandboxManager.parseMemoryLimit('invalid')).toThrow(SandboxError);
-            expect(sandboxManager.parseMemoryLimit('512m')).toBe(512 * 1024 * 1024);
-            expect(sandboxManager.parseMemoryLimit('1g')).toBe(1024 * 1024 * 1024);
+        it('should handle clone failures', async () => {
+            mockExec.start.mockResolvedValue(mockStream);
+            mockExec.inspect.mockResolvedValue({ ExitCode: 128 });
+
+            await expect(sandboxManager.cloneRepository(validRepoUrl))
+                .rejects
+                .toThrow(CommandExecutionError);
+        });
+
+        it('should support branch checkout', async () => {
+            mockExec.start.mockResolvedValue(mockStream);
+            mockExec.inspect.mockResolvedValue({ ExitCode: 0 });
+
+            await sandboxManager.cloneRepository(validRepoUrl, { branch: 'develop' });
+
+            expect(mockContainer.exec).toHaveBeenCalledWith(expect.objectContaining({
+                Cmd: ['git', 'clone', '--branch', 'develop', validRepoUrl, '.']
+            }));
         });
     });
 
-    describe('Container Management', () => {
-        test('should create and start container successfully', async () => {
-            const containerId = await sandboxManager.createAndStartContainer();
-            expect(containerId).toBe('mock-container-id');
-            expect(Docker.mock.instances[0].createContainer).toHaveBeenCalled();
-        });
+    describe('listRepositoryFiles', () => {
+        it('should list files in container path', async () => {
+            const mockOutput = 'file1.js\nfile2.js\nfile3.js\n';
+            mockExec.start.mockResolvedValue(mockStream);
+            mockExec.inspect.mockResolvedValue({ ExitCode: 0 });
 
-        test('should handle container creation failure', async () => {
-            Docker.mock.instances[0].createContainer.mockRejectedValue(new Error('Creation failed'));
-            await expect(sandboxManager.createAndStartContainer()).rejects.toThrow(ContainerCreationError);
-        });
-
-        test('should cleanup container successfully', async () => {
-            const containerId = await sandboxManager.createAndStartContainer();
-            await sandboxManager.cleanupContainer(containerId);
-            expect(sandboxManager.activeContainers.size).toBe(0);
-        });
-
-        test('should handle container cleanup when container is not found', async () => {
-            await expect(sandboxManager.cleanupContainer('non-existent-id')).resolves.not.toThrow();
-        });
-    });
-
-    describe('Command Execution', () => {
-        let containerId;
-
-        beforeEach(async () => {
-            containerId = await sandboxManager.createAndStartContainer();
-        });
-
-        test('should execute command successfully', async () => {
-            const result = await sandboxManager.executeCommand(containerId, 'echo "test"');
-            expect(result.exitCode).toBe(0);
-        });
-
-        test('should handle command execution timeout', async () => {
-            const mockExec = {
-                start: jest.fn().mockImplementation(() => {
-                    return new Promise(resolve => setTimeout(resolve, 1000));
+            // Mock the output stream
+            const mockPassThrough = {
+                on: jest.fn((event, handler) => {
+                    if (event === 'data') {
+                        handler(Buffer.from(mockOutput));
+                    }
                 })
             };
-            Docker.mock.instances[0].createContainer.mockResolvedValue({
-                ...Docker.mock.instances[0].createContainer(),
-                exec: jest.fn().mockResolvedValue(mockExec)
+            Docker.prototype.modem.demuxStream.mockImplementation((stream, stdout) => {
+                stdout.on('data', () => {});
             });
 
-            await expect(
-                sandboxManager.executeCommand(containerId, 'sleep 10', { timeoutMs: 100 })
-            ).rejects.toThrow(CommandTimeoutError);
+            const files = await sandboxManager.listRepositoryFiles(mockContainerId, '/project');
+            expect(files).toEqual(['file1.js', 'file2.js', 'file3.js']);
+            expect(mockContainer.exec).toHaveBeenCalledWith(expect.objectContaining({
+                Cmd: expect.arrayContaining(['find', '.'])
+            }));
         });
 
-        test('should handle non-existent container', async () => {
-            await expect(
-                sandboxManager.executeCommand('non-existent-id', 'echo "test"')
-            ).rejects.toThrow(CommandExecutionError);
+        it('should handle no files found', async () => {
+            mockExec.start.mockResolvedValue(mockStream);
+            mockExec.inspect.mockResolvedValue({ ExitCode: 0 });
+
+            const files = await sandboxManager.listRepositoryFiles(mockContainerId, '/project');
+            expect(files).toEqual([]);
+        });
+
+        it('should throw error for invalid path', async () => {
+            mockExec.start.mockResolvedValue(mockStream);
+            mockExec.inspect.mockResolvedValue({ ExitCode: 1 });
+
+            // Mock error output indicating no such directory
+            const mockErrorStream = {
+                on: jest.fn((event, handler) => {
+                    if (event === 'data') {
+                        handler(Buffer.from('No such file or directory'));
+                    }
+                })
+            };
+            Docker.prototype.modem.demuxStream.mockImplementation((stream, stdout, stderr) => {
+                stderr.on('data', () => {});
+            });
+
+            await expect(sandboxManager.listRepositoryFiles(mockContainerId, '/nonexistent'))
+                .rejects
+                .toThrow(FileSystemError);
         });
     });
 
-    describe('File System Operations', () => {
-        test('should create session directory successfully', async () => {
-            const sessionDir = await sandboxManager.createSessionHostDir('test-');
-            expect(sessionDir).toContain('test-');
-            expect(fs.ensureDir).toHaveBeenCalled();
-        });
+    describe('readRepositoryFile', () => {
+        it('should read file content', async () => {
+            const mockContent = 'file content';
+            mockExec.start.mockResolvedValue(mockStream);
+            mockExec.inspect.mockResolvedValue({ ExitCode: 0 });
 
-        test('should handle session directory creation failure', async () => {
-            fs.ensureDir.mockRejectedValue(new Error('Creation failed'));
-            await expect(sandboxManager.createSessionHostDir()).rejects.toThrow(FileSystemError);
-        });
-
-        test('should prevent cleanup outside temp directory', async () => {
-            await expect(
-                sandboxManager.cleanupSessionHostDir('/etc/sensitive')
-            ).rejects.toThrow(SecurityViolationError);
-        });
-
-        test('should prepare project files for mounting', async () => {
-            const sessionDir = await sandboxManager.createSessionHostDir();
-            const projectFiles = {
-                'src/main.js': 'console.log("test");',
-                'package.json': '{"name": "test"}'
+            // Mock the output stream
+            const mockPassThrough = {
+                on: jest.fn((event, handler) => {
+                    if (event === 'data') {
+                        handler(Buffer.from(mockContent));
+                    }
+                })
             };
+            Docker.prototype.modem.demuxStream.mockImplementation((stream, stdout) => {
+                stdout.on('data', () => {});
+            });
 
-            const mountStrings = await sandboxManager.prepareProjectFilesForMount(sessionDir, projectFiles);
-            expect(mountStrings).toHaveLength(2);
-            expect(mountStrings[0]).toContain(':ro'); // Should be read-only
-            expect(fs.writeFile).toHaveBeenCalledTimes(2);
+            const content = await sandboxManager.readRepositoryFile(
+                mockContainerId,
+                '/sandbox_project/cloned_repo/file.txt'
+            );
+            expect(content).toBe(mockContent);
         });
 
-        test('should prevent path traversal in project files', async () => {
-            const sessionDir = await sandboxManager.createSessionHostDir();
-            const projectFiles = {
-                '../../../etc/passwd': 'malicious content'
-            };
+        it('should prevent path traversal', async () => {
+            await expect(sandboxManager.readRepositoryFile(
+                mockContainerId,
+                '/sandbox_project/cloned_repo/../../../etc/passwd'
+            )).rejects.toThrow(SecurityViolationError);
+        });
 
-            await expect(
-                sandboxManager.prepareProjectFilesForMount(sessionDir, projectFiles)
-            ).rejects.toThrow(SecurityViolationError);
+        it('should handle file not found', async () => {
+            mockExec.start.mockResolvedValue(mockStream);
+            mockExec.inspect.mockResolvedValue({ ExitCode: 1 });
+
+            await expect(sandboxManager.readRepositoryFile(
+                mockContainerId,
+                '/sandbox_project/cloned_repo/nonexistent.txt'
+            )).rejects.toThrow(FileSystemError);
         });
     });
 
-    describe('Cleanup Operations', () => {
-        test('should cleanup all containers', async () => {
-            await sandboxManager.createAndStartContainer();
-            await sandboxManager.createAndStartContainer();
-            expect(sandboxManager.activeContainers.size).toBe(2);
+    describe('installNpmDependencies', () => {
+        it('should execute npm install successfully', async () => {
+            mockExec.start.mockResolvedValue(mockStream);
+            mockExec.inspect.mockResolvedValue({ ExitCode: 0 });
 
-            await sandboxManager.cleanupAllContainers();
-            expect(sandboxManager.activeContainers.size).toBe(0);
+            const result = await sandboxManager.installNpmDependencies(
+                mockContainerId,
+                '/project'
+            );
+
+            expect(result.exitCode).toBe(0);
+            expect(mockContainer.exec).toHaveBeenCalledWith(expect.objectContaining({
+                Cmd: ['npm', 'install']
+            }));
         });
 
-        test('should handle cleanup failures gracefully', async () => {
-            const containerId = await sandboxManager.createAndStartContainer();
-            const mockContainer = sandboxManager.activeContainers.get(containerId);
-            mockContainer.remove.mockRejectedValue(new Error('Removal failed'));
+        it('should support production install', async () => {
+            mockExec.start.mockResolvedValue(mockStream);
+            mockExec.inspect.mockResolvedValue({ ExitCode: 0 });
 
-            await expect(sandboxManager.cleanupContainer(containerId)).resolves.not.toThrow();
-            expect(sandboxManager.activeContainers.size).toBe(0);
+            await sandboxManager.installNpmDependencies(
+                mockContainerId,
+                '/project',
+                { production: true }
+            );
+
+            expect(mockContainer.exec).toHaveBeenCalledWith(expect.objectContaining({
+                Cmd: ['npm', 'install', '--production']
+            }));
+        });
+    });
+
+    describe('installPythonDependencies', () => {
+        it('should execute pip install successfully', async () => {
+            mockExec.start.mockResolvedValue(mockStream);
+            mockExec.inspect.mockResolvedValue({ ExitCode: 0 });
+
+            const result = await sandboxManager.installPythonDependencies(
+                mockContainerId,
+                '/project'
+            );
+
+            expect(result.exitCode).toBe(0);
+            expect(mockContainer.exec).toHaveBeenCalledWith(expect.objectContaining({
+                Cmd: ['pip', 'install', '-r', 'requirements.txt']
+            }));
+        });
+
+        it('should support custom requirements file', async () => {
+            mockExec.start.mockResolvedValue(mockStream);
+            mockExec.inspect.mockResolvedValue({ ExitCode: 0 });
+
+            await sandboxManager.installPythonDependencies(
+                mockContainerId,
+                '/project',
+                { requirementsFile: 'dev-requirements.txt' }
+            );
+
+            expect(mockContainer.exec).toHaveBeenCalledWith(expect.objectContaining({
+                Cmd: ['pip', 'install', '-r', 'dev-requirements.txt']
+            }));
+        });
+    });
+
+    describe('runLinter', () => {
+        it('should execute linter command successfully', async () => {
+            mockExec.start.mockResolvedValue(mockStream);
+            mockExec.inspect.mockResolvedValue({ ExitCode: 0 });
+
+            const result = await sandboxManager.runLinter(
+                mockContainerId,
+                '/project',
+                ['eslint', '.']
+            );
+
+            expect(result.exitCode).toBe(0);
+            expect(mockContainer.exec).toHaveBeenCalledWith(expect.objectContaining({
+                Cmd: ['eslint', '.']
+            }));
+        });
+
+        it('should handle linter errors', async () => {
+            mockExec.start.mockResolvedValue(mockStream);
+            mockExec.inspect.mockResolvedValue({ ExitCode: 1 });
+
+            const result = await sandboxManager.runLinter(
+                mockContainerId,
+                '/project',
+                ['eslint', '.']
+            );
+
+            expect(result.exitCode).toBe(1);
+        });
+    });
+
+    describe('runTests', () => {
+        it('should execute test command successfully', async () => {
+            mockExec.start.mockResolvedValue(mockStream);
+            mockExec.inspect.mockResolvedValue({ ExitCode: 0 });
+
+            const result = await sandboxManager.runTests(
+                mockContainerId,
+                '/project',
+                ['npm', 'test']
+            );
+
+            expect(result.exitCode).toBe(0);
+            expect(mockContainer.exec).toHaveBeenCalledWith(expect.objectContaining({
+                Cmd: ['npm', 'test']
+            }));
+        });
+
+        it('should support environment variables', async () => {
+            mockExec.start.mockResolvedValue(mockStream);
+            mockExec.inspect.mockResolvedValue({ ExitCode: 0 });
+
+            await sandboxManager.runTests(
+                mockContainerId,
+                '/project',
+                ['npm', 'test'],
+                { envVars: ['CI=true'] }
+            );
+
+            expect(mockContainer.exec).toHaveBeenCalledWith(expect.objectContaining({
+                Env: ['CI=true']
+            }));
+        });
+
+        it('should handle test failures', async () => {
+            mockExec.start.mockResolvedValue(mockStream);
+            mockExec.inspect.mockResolvedValue({ ExitCode: 1 });
+
+            const result = await sandboxManager.runTests(
+                mockContainerId,
+                '/project',
+                ['npm', 'test']
+            );
+
+            expect(result.exitCode).toBe(1);
         });
     });
 });

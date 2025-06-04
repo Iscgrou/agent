@@ -3,16 +3,16 @@
 
 import { VertexAI } from '@google-cloud/vertexai';
 
+import { PlatformError } from './error-utils.js';
+
 /**
  * Custom error class for Vertex AI related errors
+ * Extends PlatformError to integrate with the platform's error handling system
  */
-class VertexAIError extends Error {
-    constructor(message, code, context = {}, originalError = null) {
-        super(message);
-        this.name = 'VertexAIError';
-        this.code = code;
-        this.context = context;
-        this.originalError = originalError;
+class VertexAIError extends PlatformError {
+    constructor(message, code = 'VERTEX_AI_GENERIC', context = {}, originalError = null, severity = 'CRITICAL') {
+        super(message, code, context, originalError, severity);
+        // PlatformError constructor handles name setting via this.constructor.name
         this.timestamp = new Date().toISOString();
     }
 }

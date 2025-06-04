@@ -1,0 +1,9 @@
+{
+  "port": 3001,
+  "featureFlags": {
+    "newDashboard": true
+  },
+  "database": {
+    "host": "localhost_dev"
+  }
+}

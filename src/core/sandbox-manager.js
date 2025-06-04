@@ -8,27 +8,47 @@ import fs from 'fs-extra'; // For file system operations, provides more than nat
 import path from 'path';
 import { PassThrough } from 'stream'; // For capturing stdout/stderr
 
+import { PlatformError } from './error-utils.js';
+
 // --- Custom Error Classes for Sandbox Operations ---
-class SandboxError extends Error {
-    constructor(message, code, context = {}, originalError = null) {
-        super(message);
-        this.name = this.constructor.name; // More specific error names are better
-        this.code = code; // e.g., 'CONTAINER_CREATE_FAILED', 'COMMAND_TIMEOUT'
-        this.context = context;
-        this.originalError = originalError;
+class SandboxError extends PlatformError {
+    constructor(message, code = 'SANDBOX_GENERIC', context = {}, originalError = null, severity = 'CRITICAL') {
+        super(message, code, context, originalError, severity);
         this.timestamp = new Date().toISOString();
     }
 }
 
-class ContainerCreationError extends SandboxError { constructor(m,c,o) { super(m, 'CONTAINER_CREATE_FAILED',c,o); this.name = 'ContainerCreationError';} }
-class CommandExecutionError extends SandboxError { constructor(m,c,o) { super(m, 'COMMAND_EXECUTION_ERROR',c,o); this.name = 'CommandExecutionError';} }
-class CommandTimeoutError extends SandboxError { constructor(m,c,o) { super(m, 'COMMAND_TIMEOUT_ERROR',c,o); this.name = 'CommandTimeoutError';} }
-class FileSystemError extends SandboxError { constructor(m,c,o) { super(m, 'FILESYSTEM_ERROR',c,o); this.name = 'FileSystemError';} }
-class SecurityViolationError extends SandboxError { constructor(m,c,o) { super(m, 'SECURITY_VIOLATION_ERROR',c,o); this.name = 'SecurityViolationError';} }
+class ContainerCreationError extends SandboxError {
+    constructor(message, context = {}, originalError = null) {
+        super(message, 'CONTAINER_CREATE_FAILED', context, originalError, 'CRITICAL');
+    }
+}
 
+class CommandExecutionError extends SandboxError {
+    constructor(message, context = {}, originalError = null) {
+        super(message, 'COMMAND_EXECUTION_ERROR', context, originalError, 'RECOVERABLE_WITH_MODIFICATION');
+    }
+}
+
+class CommandTimeoutError extends SandboxError {
+    constructor(message, context = {}, originalError = null) {
+        super(message, 'COMMAND_TIMEOUT_ERROR', context, originalError, 'RECOVERABLE_WITH_MODIFICATION');
+    }
+}
+
+class FileSystemError extends SandboxError {
+    constructor(message, context = {}, originalError = null) {
+        super(message, 'FILESYSTEM_ERROR', context, originalError, 'CRITICAL');
+    }
+}
+
+class SecurityViolationError extends SandboxError {
+    constructor(message, context = {}, originalError = null) {
+        super(message, 'SECURITY_VIOLATION_ERROR', context, originalError, 'FATAL');
+    }
+}
 
 // --- SandboxManager Implementation ---
-
 class SandboxManager {
     /**
      * @param {object} config
@@ -103,7 +123,6 @@ class SandboxManager {
                 } : {}),
             },
             ReadonlyRootfs: options.readonlyRootfs === undefined ? true : options.readonlyRootfs, // Secure default
-             // SecurityOpt: ['no-new-privileges', `seccomp=${path.resolve('./default-seccomp.json')}`] // Example
         };
 
         // Ensure image exists locally or pull it
@@ -127,8 +146,8 @@ class SandboxManager {
             const container = await this.docker.createContainer({
                 Image: imageId,
                 name: containerName,
-                User: this.containerUser, // Critical for security
-                Tty: false, // Usually false for non-interactive command execution
+                User: this.containerUser,
+                Tty: false,
                 OpenStdin: false,
                 StdinOnce: false,
                 AttachStdin: false,
@@ -136,7 +155,7 @@ class SandboxManager {
                 AttachStderr: true,
                 Env: options.envVars || [],
                 HostConfig: hostConfig,
-                WorkingDir: options.workingDir || '/sandbox_project', // Ensure this exists or is created by mounts
+                WorkingDir: options.workingDir || '/sandbox_project',
                 StopTimeout: options.stopTimeoutSeconds || 10,
             });
 
@@ -174,7 +193,7 @@ class SandboxManager {
                 Cmd: cmdArray,
                 AttachStdout: true,
                 AttachStderr: true,
-                User: this.containerUser, // Re-affirm user if possible/necessary
+                User: this.containerUser,
                 WorkingDir: options.workingDir,
                 Env: options.envVars,
             });
@@ -189,7 +208,6 @@ class SandboxManager {
         const outputStream = new PassThrough();
         const errorStream = new PassThrough();
 
-        // Demultiplex the stream from Docker
         this.docker.modem.demuxStream(stream, outputStream, errorStream);
 
         outputStream.on('data', chunk => output += chunk.toString('utf8'));
@@ -198,8 +216,6 @@ class SandboxManager {
         const timeoutPromise = new Promise((_, reject) => {
             if (options.timeoutMs && options.timeoutMs > 0) {
                 setTimeout(() => {
-                    // Attempt to stop the exec instance if possible (Docker API for exec stop is tricky)
-                    // For now, we rely on the container possibly being stopped or the exec just timing out on our side.
                     console.warn(`[Sandbox] Command in ${containerId} timed out after ${options.timeoutMs}ms.`);
                     reject(new CommandTimeoutError(`Command timed out after ${options.timeoutMs}ms`, { containerId, command }));
                 }, options.timeoutMs);
@@ -217,21 +233,16 @@ class SandboxManager {
                 }
             });
             stream.on('error', err => {
-                 reject(new CommandExecutionError(`Stream error during exec in ${containerId}`, {containerId, command}, err));
+                reject(new CommandExecutionError(`Stream error during exec in ${containerId}`, {containerId, command}, err));
             });
         });
 
         try {
             return await Promise.race([executionPromise, timeoutPromise]);
         } catch (err) {
-            // If timeoutPromise rejected, err is CommandTimeoutError.
-            // If executionPromise rejected, it's some other CommandExecutionError.
-            // Ensure the container is handled reasonably if a command fails catastrophically.
-            // Depending on the error, consider stopping the container.
             throw err;
         }
     }
-
 
     /**
      * Copies files/directories from host to a path inside the container.
@@ -251,11 +262,6 @@ class SandboxManager {
             throw new FileSystemError(`Host path does not exist: ${hostPath}`, { hostPath });
         }
         console.log(`[Sandbox] Copying from host:${hostPath} to ${containerId}:${containerPath}`);
-        // Docker's putArchive is for TAR streams. Simpler for single files/dirs might be to mount.
-        // For now, assume mounting is preferred, this is a placeholder for more complex scenarios.
-        // If using putArchive, one would need to tar the hostPath first.
-        // This is highly simplified as direct file copy is best done via mounts.
-        // A more robust implementation would use `container.putArchive`.
         throw new SandboxError("Direct copyToContainer is complex; prefer volume mounts.", "NOT_IMPLEMENTED_ROBUSTLY");
     }
 
@@ -274,33 +280,13 @@ class SandboxManager {
         console.log(`[Sandbox] Copying from ${containerId}:${containerPath} to host:${hostPath}`);
         try {
             const stream = await container.getArchive({ path: containerPath });
-            // Ensure hostPath directory exists
             const hostDir = path.dirname(hostPath);
             await fs.ensureDir(hostDir);
-
-            // Pipe stream to a tar extractor. 'tar-fs' or 'tar-stream' could be used.
-            // This is a simplified placeholder. A robust implementation needs a tar stream parser.
-            // For example, using 'tar-fs':
-            // const extractor = tar.extract(hostPath); // or to a specific directory if containerPath is a dir
-            // stream.pipe(extractor);
-            // await new Promise((resolve, reject) => {
-            //     extractor.on('finish', resolve);
-            //     extractor.on('error', reject);
-            // });
-            // For now, logging that the raw stream would be handled here:
-            console.warn("[Sandbox] copyFromContainer received tar stream, robust extraction needed.");
-            // A very naive approach for a single file (NOT FOR PRODUCTION):
-            // const chunks = [];
-            // for await (const chunk of stream) { chunks.push(chunk); }
-            // await fs.writeFile(hostPath, Buffer.concat(chunks)); // This is wrong, it's a tar archive stream
-
             throw new SandboxError("Robust tar extraction for copyFromContainer is required.", "NOT_IMPLEMENTED_ROBUSTLY");
-
         } catch (err) {
             throw new FileSystemError(`Failed to copy from ${containerId}:${containerPath}`, { containerId, containerPath }, err);
         }
     }
-
 
     /**
      * Stops and removes a specific container.
@@ -319,26 +305,20 @@ class SandboxManager {
         console.log(`[Sandbox] Cleaning up container ${containerId}...`);
         try {
             try {
-                // Check if container is running before trying to stop
                 const inspectData = await container.inspect();
                 if (inspectData.State.Running) {
                     await container.stop({ t: options.stopTimeoutSeconds || 10 });
-                     console.log(`[Sandbox] Container ${containerId} stopped.`);
+                    console.log(`[Sandbox] Container ${containerId} stopped.`);
                 }
             } catch (err) {
-                 // If inspect fails (e.g. container already removed) or stop fails, proceed to remove
                 console.warn(`[Sandbox] Error stopping container ${containerId} (may already be stopped/removed): ${err.message}`);
             }
             await container.remove({ force: options.force || false, v: options.removeVolumes || false });
             this.activeContainers.delete(containerId);
             console.log(`[Sandbox] Container ${containerId} removed.`);
         } catch (err) {
-            // If removal fails, it might be an operational issue or the container is already gone.
-            // Log it but don't necessarily throw if the intent is just to ensure it's gone.
             console.error(`[Sandbox] Failed to remove container ${containerId}: ${err.message}. It might require manual cleanup or was already removed.`);
-             this.activeContainers.delete(containerId); // Still remove from active list
-            // Consider re-throwing if strict cleanup is required:
-            // throw new SandboxError(`Failed to fully cleanup container ${containerId}`, { containerId }, err);
+            this.activeContainers.delete(containerId);
         }
     }
 
@@ -350,15 +330,13 @@ class SandboxManager {
         console.log(`[Sandbox] Cleaning up all ${this.activeContainers.size} active containers...`);
         const cleanupPromises = [];
         for (const containerId of this.activeContainers.keys()) {
-            cleanupPromises.push(this.cleanupContainer(containerId, { force: true })); // Force cleanup on shutdown
+            cleanupPromises.push(this.cleanupContainer(containerId, { force: true }));
         }
-        await Promise.allSettled(cleanupPromises); // Use allSettled to ensure all attempts are made
+        await Promise.allSettled(cleanupPromises);
         this.activeContainers.clear();
         console.log("[Sandbox] All active containers processed for cleanup.");
     }
 
-
-    // --- Utility for creating a unique temporary directory on the host for a sandbox session ---
     /**
      * Creates a unique temporary directory on the host for a sandbox session.
      * This directory can be mounted into the container.
@@ -383,7 +361,6 @@ class SandboxManager {
      * @returns {Promise<void>}
      */
     async cleanupSessionHostDir(sessionDirPath) {
-        // Basic safety check to prevent accidental deletion outside tempHostDir
         if (!sessionDirPath || !sessionDirPath.startsWith(path.resolve(this.tempHostDir))) {
             throw new SecurityViolationError(
                 `Attempt to cleanup directory outside designated temp scope: ${sessionDirPath}`,
@@ -400,12 +377,11 @@ class SandboxManager {
         }
     }
 
-
     /**
      * Prepares project files on the host for mounting into a container.
      * @param {string} sessionHostDir - The unique host directory for this session.
      * @param {object} projectFiles - e.g., { "src/main.js": "content", "data/input.txt": "content" }
-     * @returns {Promise<Array<string>>} Array of Docker volume mount strings (e.g., "/path/to/host/src/main.js:/sandbox_project/src/main.js:ro")
+     * @returns {Promise<Array<string>>} Array of Docker volume mount strings
      */
     async prepareProjectFilesForMount(sessionHostDir, projectFiles) {
         const mountStrings = [];
@@ -415,7 +391,6 @@ class SandboxManager {
         for (const relativeFilePath in projectFiles) {
             if (Object.hasOwnProperty.call(projectFiles, relativeFilePath)) {
                 const fileContent = projectFiles[relativeFilePath];
-                // Ensure paths are not attempting to escape the sessionHostDir (basic check)
                 const hostFilePath = path.resolve(projectRootInHost, relativeFilePath);
                 if (!hostFilePath.startsWith(projectRootInHost)) {
                     throw new SecurityViolationError(`Invalid relative file path: ${relativeFilePath}`, { relativeFilePath });
@@ -424,13 +399,242 @@ class SandboxManager {
                 await fs.ensureDir(path.dirname(hostFilePath));
                 await fs.writeFile(hostFilePath, fileContent);
 
-                // Mount point inside the container, e.g., /sandbox_project/src/main.js
-                // Using path.posix.join for consistent container paths
                 const containerFilePath = path.posix.join('/sandbox_project', relativeFilePath);
-                mountStrings.push(`${hostFilePath}:${containerFilePath}:ro`); // Default to read-only
+                mountStrings.push(`${hostFilePath}:${containerFilePath}:ro`);
             }
         }
         return mountStrings;
+    }
+
+    /**
+     * Clones a Git repository into a unique directory within a new or existing sandbox session.
+     * All git operations are performed *inside* a container.
+     * @param {string} repositoryUrl - The HTTPS URL of the repository.
+     * @param {object} [options]
+     * @param {string} [options.branch] - Specific branch to checkout after cloning.
+     * @param {string} [options.commit] - Specific commit to checkout after cloning.
+     * @param {string} [options.cloneDepth] - e.g., '1' for a shallow clone.
+     * @param {string} [options.sessionHostDir] - Optional existing session host directory.
+     * @param {string} [options.containerId] - Optional existing container ID to use.
+     * @param {object} [options.auth] - Authentication options
+     * @param {string} [options.auth.token] - Personal access token
+     * @returns {Promise<{ sessionHostDir: string, repoHostPath: string, containerPath: string, containerId: string, newContainerCreated: boolean }>}
+     */
+    async cloneRepository(repositoryUrl, options = {}) {
+        let { sessionHostDir, containerId, branch, commit, cloneDepth, auth } = options;
+        const newContainerCreated = !containerId;
+        const newSessionDirCreated = !sessionHostDir;
+
+        if (!repositoryUrl || !repositoryUrl.startsWith('https://')) {
+            throw new SecurityViolationError("Invalid or non-HTTPS repository URL provided.", { repositoryUrl });
+        }
+
+        console.log(`[Sandbox] Cloning repository: ${repositoryUrl}`);
+
+        if (newSessionDirCreated) {
+            sessionHostDir = await this.createSessionHostDir('repo-session-');
+        }
+        const repoName = path.basename(repositoryUrl, '.git');
+        const repoHostPath = path.join(sessionHostDir, repoName);
+        const repoContainerPath = path.posix.join('/sandbox_project/cloned_repo', repoName);
+
+        await fs.ensureDir(repoHostPath);
+        const volumeMounts = [`${repoHostPath}:${repoContainerPath}:rw`];
+
+        if (newContainerCreated) {
+            containerId = await this.createAndStartContainer('alpine/git', {
+                volumeMounts,
+                networkMode: 'bridge',
+                envVars: auth?.token ? [`GIT_ASKPASS=true`, `GIT_USERNAME=x-access-token`, `GIT_PASSWORD=${auth.token}`] : []
+            });
+        } else {
+            console.warn("[Sandbox] Reusing existing container for clone is complex and not fully supported.");
+        }
+
+        try {
+            const gitCloneCommand = ['git', 'clone'];
+            if (cloneDepth) gitCloneCommand.push('--depth', String(cloneDepth));
+            if (branch && !commit) gitCloneCommand.push('--branch', branch);
+            gitCloneCommand.push(repositoryUrl, '.');
+
+            const cloneResult = await this.executeCommand(containerId, gitCloneCommand, {
+                timeoutMs: 300000,
+                workingDir: repoContainerPath
+            });
+
+            if (cloneResult.exitCode !== 0) {
+                throw new CommandExecutionError(`Git clone failed for ${repositoryUrl}`, { exitCode: cloneResult.exitCode, errorOutput: cloneResult.errorOutput });
+            }
+
+            if (commit) {
+                const checkoutResult = await this.executeCommand(containerId, ['git', 'checkout', commit], { workingDir: repoContainerPath });
+                if (checkoutResult.exitCode !== 0) {
+                    throw new CommandExecutionError(`Git checkout commit ${commit} failed`, { exitCode: checkoutResult.exitCode, errorOutput: checkoutResult.errorOutput });
+                }
+            }
+
+            return {
+                sessionHostDir,
+                repoHostPath,
+                repoContainerPath,
+                containerId,
+                newContainerCreated,
+                newSessionDirCreated
+            };
+        } catch (error) {
+            if (newContainerCreated && containerId) await this.cleanupContainer(containerId, { force: true });
+            if (newSessionDirCreated && sessionHostDir) await this.cleanupSessionHostDir(sessionHostDir);
+            throw error;
+        }
+    }
+
+    /**
+     * Lists files in a given path within a container (typically a cloned repository).
+     * @param {string} containerId
+     * @param {string} containerPath - Path inside the container.
+     * @param {object} [options]
+     * @param {boolean} [options.recursive=false]
+     * @param {string} [options.pattern] - Glob pattern for filtering (e.g., '*.js')
+     * @returns {Promise<Array<string>>} - List of file paths relative to containerPath.
+     */
+    async listRepositoryFiles(containerId, containerPath, options = {}) {
+        console.log(`[Sandbox] Listing files in ${containerId}:${containerPath}`);
+        let findCommand = ['find', '.'];
+        if (!options.recursive) {
+            findCommand.push('-maxdepth', '1');
+        }
+        findCommand.push('-type', 'f');
+        if (options.pattern) {
+            findCommand.push('-name', options.pattern);
+        }
+        findCommand.push('-printf', '%P\n');
+
+        const result = await this.executeCommand(containerId, findCommand, { workingDir: containerPath });
+        if (result.exitCode !== 0) {
+            if (result.errorOutput.includes("No such file or directory")) {
+                throw new FileSystemError(`Path not found in container: ${containerPath}`, { containerId, path: containerPath });
+            }
+            if (result.output === "") return [];
+        }
+        return result.output.split('\n').filter(Boolean);
+    }
+
+    /**
+     * Reads the content of a file from a path inside a container.
+     * @param {string} containerId
+     * @param {string} containerFilePath - Full path to the file inside the container.
+     * @returns {Promise<string>} - The content of the file.
+     */
+    async readRepositoryFile(containerId, containerFilePath) {
+        console.log(`[Sandbox] Reading file ${containerId}:${containerFilePath}`);
+        if (containerFilePath.includes('..') || !containerFilePath.startsWith('/sandbox_project/cloned_repo/')) {
+            if (!containerFilePath.startsWith(path.posix.join('/sandbox_project', path.basename(containerFilePath))) && !containerFilePath.startsWith(path.posix.join('/tmp', path.basename(containerFilePath)))) {
+                throw new SecurityViolationError("Attempt to read file outside allowed sandbox project path.", { path: containerFilePath });
+            }
+        }
+
+        const result = await this.executeCommand(containerId, ['cat', containerFilePath]);
+        if (result.exitCode !== 0) {
+            throw new FileSystemError(`Failed to read file ${containerFilePath}`, { details: result.errorOutput });
+        }
+        return result.output;
+    }
+
+    /**
+     * Installs NPM dependencies inside a container.
+     * @param {string} containerId
+     * @param {string} projectContainerPath - Path to the project root (containing package.json)
+     * @param {object} [options]
+     * @param {boolean} [options.production=false] - Install only production dependencies.
+     * @param {number} [options.timeoutMs=600000] - Timeout for npm install (10 minutes).
+     * @returns {Promise<{output: string, errorOutput: string, exitCode: number}>}
+     */
+    async installNpmDependencies(containerId, projectContainerPath, options = {}) {
+        console.log(`[Sandbox] Installing NPM dependencies in ${containerId}:${projectContainerPath}`);
+        const npmCommand = ['npm', 'install'];
+        if (options.production) {
+            npmCommand.push('--production');
+        }
+
+        const result = await this.executeCommand(containerId, npmCommand, {
+            workingDir: projectContainerPath,
+            timeoutMs: options.timeoutMs || 600000
+        });
+
+        if (result.exitCode !== 0) {
+            console.error(`[Sandbox] NPM install failed in ${projectContainerPath}: ${result.errorOutput}`);
+        }
+        return result;
+    }
+
+    /**
+     * Installs Python dependencies using pip inside a container.
+     * @param {string} containerId
+     * @param {string} projectContainerPath - Path to the project root
+     * @param {object} [options]
+     * @param {string} [options.requirementsFile='requirements.txt']
+     * @param {boolean} [options.upgrade=false] - Add --upgrade flag.
+     * @param {number} [options.timeoutMs=600000] - Timeout for pip install (10 minutes).
+     * @returns {Promise<{output: string, errorOutput: string, exitCode: number}>}
+     */
+    async installPythonDependencies(containerId, projectContainerPath, options = {}) {
+        console.log(`[Sandbox] Installing Python dependencies in ${containerId}:${projectContainerPath}`);
+        const pipCommand = ['pip', 'install', '-r', options.requirementsFile || 'requirements.txt'];
+        if (options.upgrade) {
+            pipCommand.push('--upgrade');
+        }
+
+        const result = await this.executeCommand(containerId, pipCommand, {
+            workingDir: projectContainerPath,
+            timeoutMs: options.timeoutMs || 600000
+        });
+
+        if (result.exitCode !== 0) {
+            console.error(`[Sandbox] Pip install failed in ${projectContainerPath}: ${result.errorOutput}`);
+        }
+        return result;
+    }
+
+    /**
+     * Runs a linter on specified files/paths within the container.
+     * @param {string} containerId
+     * @param {string} projectContainerPath - Path to the project root.
+     * @param {string|Array<string>} lintCommand - The full lint command
+     * @param {object} [options]
+     * @param {number} [options.timeoutMs=120000] - Timeout for linting (2 minutes).
+     * @returns {Promise<{output: string, errorOutput: string, exitCode: number}>}
+     */
+    async runLinter(containerId, projectContainerPath, lintCommand, options = {}) {
+        console.log(`[Sandbox] Running linter in ${containerId}:${projectContainerPath}`);
+        const result = await this.executeCommand(containerId, lintCommand, {
+            workingDir: projectContainerPath,
+            timeoutMs: options.timeoutMs || 120000
+        });
+
+        console.log(`[Sandbox] Linter finished with exit code ${result.exitCode}`);
+        return result;
+    }
+
+    /**
+     * Runs tests within the container.
+     * @param {string} containerId
+     * @param {string} projectContainerPath - Path to the project root.
+     * @param {string|Array<string>} testCommand - The full test command
+     * @param {object} [options]
+     * @param {number} [options.timeoutMs=600000] - Timeout for tests (10 minutes).
+     * @param {Array<string>} [options.envVars] - Environment variables
+     * @returns {Promise<{output: string, errorOutput: string, exitCode: number}>}
+     */
+    async runTests(containerId, projectContainerPath, testCommand, options = {}) {
+        console.log(`[Sandbox] Running tests in ${containerId}:${projectContainerPath}`);
+        const result = await this.executeCommand(containerId, testCommand, {
+            workingDir: projectContainerPath,
+            timeoutMs: options.timeoutMs || 600000,
+            envVars: options.envVars
+        });
+
+        console.log(`[Sandbox] Tests finished with exit code ${result.exitCode}`);
+        return result;
     }
 }
 
