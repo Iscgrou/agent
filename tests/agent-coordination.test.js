@@ -341,6 +341,118 @@ describe('AgentCoordinator', () => {
         });
     });
 
+    describe('Re-planning', () => {
+        const mockFailureContext = {
+            errorClassification: 'EXECUTION_ERROR',
+            failedSubtaskId: 'TASK_123',
+            replanReason: 'Task execution failed',
+            previousPlan: {
+                project_title: 'Original Project',
+                subtasks: [
+                    { id: 'TASK_123', title: 'Failed Task', status: 'failed' },
+                    { id: 'TASK_124', title: 'Successful Task', status: 'completed' }
+                ]
+            },
+            previousUnderstanding: {
+                original_request: 'Create a web app',
+                parsed_intent: 'create_webapp'
+            },
+            checkpointId: 'checkpoint_123'
+        };
+
+        beforeEach(() => {
+            mockProjectPersistence.loadProjectCheckpoint = jest.fn();
+            mockProjectPersistence.storeReplanAttempt = jest.fn();
+            agentCoordinator.chatModel.generateText
+                .mockReset()
+                .mockResolvedValueOnce(JSON.stringify({ // Re-understanding phase
+                    revised_understanding: {
+                        modified_requirements: ['Updated requirement'],
+                        new_constraints_identified: ['New constraint']
+                    }
+                }))
+                .mockResolvedValueOnce(JSON.stringify({ // Re-planning phase
+                    revised_plan: {
+                        project_title: 'Revised Project',
+                        modified_tech_stack: []
+                    }
+                }))
+                .mockResolvedValueOnce(JSON.stringify([ // Re-task breakdown phase
+                    {
+                        subtask_id: 'NEW_TASK_1',
+                        title: 'New Task 1',
+                        replan_notes: {
+                            is_modified: true,
+                            modification_reason: 'Added based on failure'
+                        }
+                    }
+                ]));
+        });
+
+        it('should successfully generate a new plan through orchestrateReplanningAnalysis', async () => {
+            mockProjectPersistence.loadProjectCheckpoint.mockResolvedValue({
+                successfulTasks: ['TASK_124']
+            });
+
+            const result = await agentCoordinator.orchestrateReplanningAnalysis(
+                'test-project',
+                mockFailureContext
+            );
+
+            expect(result).toHaveProperty('understanding');
+            expect(result).toHaveProperty('plan');
+            expect(result).toHaveProperty('subtasks');
+            expect(Array.isArray(result.subtasks)).toBe(true);
+
+            expect(mockProjectPersistence.loadProjectCheckpoint)
+                .toHaveBeenCalledWith('test-project', 'checkpoint_123');
+            expect(mockProjectPersistence.storeReplanAttempt)
+                .toHaveBeenCalledWith('test-project', expect.any(Object));
+        });
+
+        it('should handle checkpoint loading failure in orchestrateReplanningAnalysis', async () => {
+            mockProjectPersistence.loadProjectCheckpoint
+                .mockRejectedValue(new Error('Checkpoint not found'));
+
+            const result = await agentCoordinator.orchestrateReplanningAnalysis(
+                'test-project',
+                mockFailureContext
+            );
+
+            expect(result).toHaveProperty('subtasks');
+            expect(result.subtasks[0].subtask_id).toBe('NEW_TASK_1');
+        });
+
+        it('should throw PlatformError if re-planning fails to generate valid subtasks', async () => {
+            agentCoordinator.chatModel.generateText
+                .mockReset()
+                .mockResolvedValueOnce(JSON.stringify({ revised_understanding: {} }))
+                .mockResolvedValueOnce(JSON.stringify({ revised_plan: {} }))
+                .mockResolvedValueOnce(JSON.stringify([])); // Empty subtasks array
+
+            await expect(
+                agentCoordinator.orchestrateReplanningAnalysis('test-project', mockFailureContext)
+            ).rejects.toThrow(PlatformError);
+        });
+
+        it('should invoke re-planning through orchestrateFullAnalysis when isReplanAttempt is true', async () => {
+            const result = await agentCoordinator.orchestrateFullAnalysis(
+                'original request',
+                'test-project',
+                {
+                    isReplanAttempt: true,
+                    failureContext: mockFailureContext,
+                    preserveSuccessfulTasks: true
+                }
+            );
+
+            expect(result).toHaveProperty('understanding');
+            expect(result).toHaveProperty('plan');
+            expect(result).toHaveProperty('subtasks');
+            expect(result.subtasks[0].subtask_id).toBe('NEW_TASK_1');
+        });
+    });
+
     describe('orchestrateFullAnalysis with Repository Analysis', () => {
         const mockUserInput = "Create a React component";
         const mockProjectName = "test-project";

@@ -1,10 +1,19 @@
+/** @type {import('jest').Config} */
 module.exports = {
-  testEnvironment: 'node',
-  testMatch: ['**/tests/sandbox-manager.test.js'],
-  transform: {
-    '^.+\\.js$': 'babel-jest'
-  },
-  clearMocks: true,
-  resetMocks: true,
-  verbose: true
+    transform: {
+        '^.+\\.js$': 'babel-jest'
+    },
+    moduleNameMapper: {
+        '^(\\.{1,2}/.*)\\.js$': '$1'
+    },
+    testEnvironment: 'node',
+    verbose: true,
+    collectCoverage: true,
+    coverageDirectory: 'coverage',
+    coverageReporters: ['text', 'lcov'],
+    coveragePathIgnorePatterns: ['/node_modules/'],
+    testMatch: ['**/tests/**/*.test.js'],
+    testPathIgnorePatterns: ['/node_modules/'],
+    transformIgnorePatterns: ['/node_modules/'],
+    resolver: undefined
 };

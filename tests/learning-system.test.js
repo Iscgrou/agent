@@ -1,195 +1,347 @@
-// tests/learning-system.test.js
 import { jest } from '@jest/globals';
-import { v4 as uuidv4 } from 'uuid';
-import { LearningSystem, LearningSystemError } from '../src/core/learning-system.js';
-
-// Mock uuid
-jest.mock('uuid', () => ({
-    v4: jest.fn(() => 'mock-uuid')
-}));
+import { LearningSystem } from '../src/core/learning-system.js';
 
 describe('LearningSystem', () => {
     let learningSystem;
-    const mockConfig = {
-        experienceRetentionDays: 30,
-        minConfidenceForInsightAction: 0.7,
-        periodicAnalysisIntervalMs: 1000,
-        maxExperiencesPerAnalysisBatch: 10,
-        staleInsightThresholdDays: 90,
-        systemVersion: '1.0.0'
-    };
+    let mockConfigManager;
 
-    beforeEach(() => {
-        learningSystem = new LearningSystem(mockConfig);
+    beforeEach(async () => {
+        mockConfigManager = {
+            get: jest.fn((key, defaultValue) => defaultValue)
+        };
+        learningSystem = new LearningSystem({}, null, mockConfigManager);
+        await learningSystem.initialize();
     });
 
-    afterEach(() => {
-        jest.clearAllMocks();
+    afterEach(async () => {
+        if (learningSystem.isInitialized) {
+            await learningSystem.shutdown();
+        }
     });
 
-    describe('Initialization', () => {
-        test('should initialize with default config values', () => {
-            const ls = new LearningSystem();
-            expect(ls.config.experienceRetentionDays).toBe(30);
-            expect(ls.config.minConfidenceForInsightAction).toBe(0.7);
-            expect(ls.isInitialized).toBe(false);
-        });
+    describe('Experience Store Management', () => {
+        it('should prune old experiences', async () => {
+            const oldDate = new Date();
+            oldDate.setDate(oldDate.getDate() - 31); // 31 days old
+            const recentDate = new Date();
+            
+            // Add old and recent experiences
+            // Add old and recent experiences directly to store
+            await learningSystem.experienceStore.addExperience({
+                type: 'AI_PROMPT_EXECUTION',
+                context: { projectName: 'test' },
+                outcome: { status: 'SUCCESS' },
+                timestamp: oldDate.toISOString()
+            });
+            
+            await learningSystem.experienceStore.addExperience({
+                type: 'AI_PROMPT_EXECUTION',
+                context: { projectName: 'test' },
+                outcome: { status: 'SUCCESS' },
+                timestamp: recentDate.toISOString()
+            });
 
-        test('should initialize with provided config values', () => {
-            expect(learningSystem.config).toEqual(mockConfig);
-        });
+            const prunedCount = await learningSystem.experienceStore.pruneOldExperiences(
+                new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
+            );
 
-        test('should initialize stores and queue', async () => {
-            await learningSystem.initialize();
-            expect(learningSystem.isInitialized).toBe(true);
-            expect(learningSystem.experienceStore).toBeTruthy();
-            expect(learningSystem.insightStore).toBeTruthy();
-            expect(learningSystem.analysisQueue).toBeTruthy();
+            expect(prunedCount).toBe(1);
+            const remaining = await learningSystem.experienceStore.findExperiences({});
+            expect(remaining.length).toBe(1);
         });
     });
 
-    describe('Experience Logging', () => {
-        beforeEach(async () => {
-            await learningSystem.initialize();
+    describe('Insight Store Management', () => {
+        it('should track insight usage with effectiveness score', async () => {
+            const insightId = await learningSystem.insightStore.saveInsight({
+                type: 'PROMPT_EFFECTIVENESS',
+                description: 'Test insight'
+            });
+
+            // Apply insight successfully twice and fail once
+            await learningSystem.insightStore.incrementInsightUsage(insightId, true);
+            await learningSystem.insightStore.incrementInsightUsage(insightId, true);
+            await learningSystem.insightStore.incrementInsightUsage(insightId, false);
+
+            const insight = await learningSystem.insightStore.getInsightById(insightId);
+            expect(insight.evaluation.effectivenessScore).toBe(2/3);
+            expect(insight.status).toBe('APPLIED');
         });
 
-        test('should log experience with correct structure', async () => {
-            const experienceInput = {
+        it('should support advanced filtering in findInsights', async () => {
+            // Create test insights
+            await learningSystem.insightStore.saveInsight({
+                type: 'PROMPT_EFFECTIVENESS',
+                patternDetails: { promptId: 'test1' },
+                evaluation: { effectivenessScore: 0.8 }
+            });
+
+            await learningSystem.insightStore.saveInsight({
+                type: 'ERROR_PATTERN',
+                patternDetails: { errorCode: 'TEST_ERROR' },
+                evaluation: { effectivenessScore: 0.4 }
+            });
+
+            // Test filtering by promptId
+            const promptInsights = await learningSystem.insightStore.findInsights({
+                relatedToPromptId: 'test1'
+            });
+            expect(promptInsights.length).toBe(1);
+            expect(promptInsights[0].patternDetails.promptId).toBe('test1');
+
+            // Test filtering by error pattern
+            const errorInsights = await learningSystem.insightStore.findInsights({
+                relatedToErrorPattern: 'TEST_ERROR'
+            });
+            expect(errorInsights.length).toBe(1);
+            expect(errorInsights[0].patternDetails.errorCode).toBe('TEST_ERROR');
+
+            // Test sorting by effectiveness score
+            const sortedInsights = await learningSystem.insightStore.findInsights({
+                sortBy: 'evaluation.effectivenessScore',
+                sortOrder: 'desc'
+            });
+            expect(sortedInsights[0].evaluation.effectivenessScore).toBe(0.8);
+        });
+    });
+
+    describe('_analyzePromptPerformance', () => {
+        it('should identify low success rate patterns', async () => {
+            const experiences = [
+                {
+                    type: 'AI_PROMPT_EXECUTION',
+                    context: { promptId: 'test_prompt', modelName: 'test-model' },
+                    outcome: { status: 'SUCCESS', durationMs: 1000, metrics: { tokensUsed: { total: 100 } } }
+                },
+                {
+                    type: 'AI_PROMPT_EXECUTION',
+                    context: { promptId: 'test_prompt', modelName: 'test-model' },
+                    outcome: { 
+                        status: 'FAILURE', 
+                        error: { code: 'AI_ERROR', message: 'Failed' },
+                        durationMs: 1200,
+                        metrics: { tokensUsed: { total: 120 } }
+                    }
+                },
+                {
+                    type: 'AI_PROMPT_EXECUTION',
+                    context: { promptId: 'test_prompt', modelName: 'test-model' },
+                    outcome: { 
+                        status: 'FAILURE',
+                        error: { code: 'AI_ERROR', message: 'Failed again' },
+                        durationMs: 900,
+                        metrics: { tokensUsed: { total: 90 } }
+                    }
+                }
+            ];
+
+            const insights = await learningSystem._analyzePromptPerformance(experiences);
+            
+            expect(insights).toHaveLength(1);
+            expect(insights[0]).toMatchObject({
+                type: 'PROMPT_EFFECTIVENESS',
+                patternDetails: {
+                    promptId: 'test_prompt',
+                    modelName: 'test-model',
+                    observedMetrics: {
+                        successRate: 1/3,
+                        totalExecutions: 3
+                    }
+                }
+            });
+        });
+
+        it('should identify high token usage patterns', async () => {
+            const experiences = Array(5).fill(null).map(() => ({
+                type: 'AI_PROMPT_EXECUTION',
+                context: { promptId: 'large_prompt', modelName: 'test-model' },
+                outcome: {
+                    status: 'SUCCESS',
+                    durationMs: 1000,
+                    metrics: { tokensUsed: { total: 5000 } }
+                }
+            }));
+
+            const insights = await learningSystem._analyzePromptPerformance(experiences);
+            
+            expect(insights.some(i => i.type === 'PROMPT_EFFICIENCY')).toBe(true);
+        });
+    });
+
+    describe('_detectErrorPatterns', () => {
+        it('should identify recurring error patterns in specific contexts', async () => {
+            const experiences = Array(5).fill(null).map(() => ({
                 type: 'SUBTASK_EXECUTION',
                 context: {
-                    projectName: 'test-project',
-                    subtaskId: '123'
+                    subtaskType: 'code_generation',
+                    agentPersona: 'PythonDeveloper',
+                    projectName: 'test-project'
+                },
+                outcome: {
+                    status: 'FAILURE',
+                    error: {
+                        code: 'SYNTAX_ERROR',
+                        message: 'Invalid Python syntax'
+                    }
+                }
+            }));
+
+            const insights = await learningSystem._detectErrorPatterns(experiences);
+            
+            expect(insights).toHaveLength(1);
+            expect(insights[0]).toMatchObject({
+                type: 'ERROR_FREQUENCY_PATTERN',
+                patternDetails: {
+                    errorCode: 'SYNTAX_ERROR',
+                    triggeringContext: {
+                        subtaskType: 'code_generation',
+                        agentPersona: 'PythonDeveloper'
+                    }
+                }
+            });
+        });
+
+        it('should not generate insights for infrequent errors', async () => {
+            const experiences = [
+                {
+                    type: 'SUBTASK_EXECUTION',
+                    context: { subtaskType: 'code_generation' },
+                    outcome: {
+                        status: 'FAILURE',
+                        error: { code: 'RARE_ERROR' }
+                    }
+                }
+            ];
+
+            const insights = await learningSystem._detectErrorPatterns(experiences);
+            expect(insights).toHaveLength(0);
+        });
+    });
+
+    describe('_evaluateTaskEfficiency', () => {
+        it('should identify tasks with high duration variability', async () => {
+            const experiences = [
+                {
+                    type: 'SUBTASK_EXECUTION',
+                    context: {
+                        subtaskType: 'code_generation',
+                        subtask: { expected_artifacts: ['src/main.py'] }
+                    },
+                    outcome: {
+                        status: 'SUCCESS',
+                        durationMs: 1000,
+                        metrics: { retryAttempts: 0 }
+                    }
+                },
+                {
+                    type: 'SUBTASK_EXECUTION',
+                    context: {
+                        subtaskType: 'code_generation',
+                        subtask: { expected_artifacts: ['src/main.py'] }
+                    },
+                    outcome: {
+                        status: 'SUCCESS',
+                        durationMs: 5000,
+                        metrics: { retryAttempts: 0 }
+                    }
+                },
+                {
+                    type: 'SUBTASK_EXECUTION',
+                    context: {
+                        subtaskType: 'code_generation',
+                        subtask: { expected_artifacts: ['src/main.py'] }
+                    },
+                    outcome: {
+                        status: 'SUCCESS',
+                        durationMs: 2000,
+                        metrics: { retryAttempts: 0 }
+                    }
+                }
+            ];
+
+            const insights = await learningSystem._evaluateTaskEfficiency(experiences);
+            expect(insights.length).toBeGreaterThan(0);
+            const anomalyInsight = insights.find(i => i.type === 'TASK_DURATION_ANOMALY');
+            expect(anomalyInsight).toBeDefined();
+            expect(anomalyInsight.patternDetails.varianceMetrics.durationVariance).toBeGreaterThan(1000);
+        });
+
+        it('should identify tasks with high retry rates', async () => {
+            const experiences = Array(3).fill(null).map(() => ({
+                type: 'SUBTASK_EXECUTION',
+                context: {
+                    subtaskType: 'api_integration',
+                    subtask: { expected_artifacts: ['api_client.js'] }
                 },
                 outcome: {
                     status: 'SUCCESS',
-                    durationMs: 1000
+                    durationMs: 1000,
+                    metrics: { retryAttempts: 3 }
                 }
-            };
-
-            const logSpy = jest.spyOn(learningSystem.experienceStore, 'logExperience');
-            const enqueueSpy = jest.spyOn(learningSystem.analysisQueue, 'enqueue');
-
-            const loggedId = await learningSystem.logExperience(experienceInput);
-
-            expect(loggedId).toBe('mock-uuid');
-            expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({
-                id: 'mock-uuid',
-                type: 'SUBTASK_EXECUTION',
-                context: expect.objectContaining({
-                    projectName: 'test-project',
-                    subtaskId: '123'
-                }),
-                metadata: expect.objectContaining({
-                    systemVersion: mockConfig.systemVersion
-                })
             }));
-            expect(enqueueSpy).toHaveBeenCalledWith('mock-uuid');
+
+            const insights = await learningSystem._evaluateTaskEfficiency(experiences);
+            
+            expect(insights.some(i => i.type === 'TASK_COMPLEXITY_ISSUE')).toBe(true);
         });
 
-        test('should throw if not initialized', async () => {
-            const uninitializedSystem = new LearningSystem(mockConfig);
-            await expect(uninitializedSystem.logExperience({}))
-                .rejects
-                .toThrow(LearningSystemError);
+        it('should not generate insights for tasks with insufficient data', async () => {
+            const experiences = [
+                {
+                    type: 'SUBTASK_EXECUTION',
+                    context: { subtaskType: 'rare_task' },
+                    outcome: {
+                        status: 'SUCCESS',
+                        durationMs: 1000,
+                        metrics: { retryAttempts: 0 }
+                    }
+                }
+            ];
+
+            const insights = await learningSystem._evaluateTaskEfficiency(experiences);
+            expect(insights).toHaveLength(0);
         });
     });
 
-    describe('Experience Processing', () => {
-        beforeEach(async () => {
-            await learningSystem.initialize();
-        });
+    describe('Integration with processExperiences', () => {
+        it('should process experiences and generate insights across all analyzers', async () => {
+            const experiences = [
+                // Prompt performance experience
+                {
+                    type: 'AI_PROMPT_EXECUTION',
+                    context: { promptId: 'test_prompt' },
+                    outcome: { status: 'FAILURE', error: { code: 'AI_ERROR' } }
+                },
+                // Error pattern experience
+                {
+                    type: 'SUBTASK_EXECUTION',
+                    context: { subtaskType: 'code_generation' },
+                    outcome: { status: 'FAILURE', error: { code: 'SYNTAX_ERROR' } }
+                },
+                // Task efficiency experience
+                {
+                    type: 'SUBTASK_EXECUTION',
+                    context: { subtaskType: 'api_integration' },
+                    outcome: { status: 'SUCCESS', durationMs: 5000, metrics: { retryAttempts: 2 } }
+                }
+            ];
 
-        test('should process experiences and generate insights', async () => {
-            // Mock experience data
-            const mockExperience = {
-                id: 'exp-1',
-                type: 'SUBTASK_EXECUTION',
-                context: { projectName: 'test' },
-                outcome: { status: 'SUCCESS' }
+            // Mock the insight store
+            learningSystem.insightStore = {
+                saveInsight: jest.fn().mockImplementation(insight => Promise.resolve(insight.id))
             };
 
-            // Setup spies
-            const findExperiencesSpy = jest.spyOn(learningSystem.experienceStore, 'findExperiences')
-                .mockResolvedValue([mockExperience]);
-            const saveInsightSpy = jest.spyOn(learningSystem.insightStore, 'saveInsight')
-                .mockResolvedValue('insight-1');
+            // Add experiences to the store
+            for (const exp of experiences) {
+                await learningSystem.logExperience(exp);
+            }
 
-            // Mock analysis methods to return some insights
-            jest.spyOn(learningSystem, '_analyzePromptPerformance')
-                .mockResolvedValue([{
-                    id: 'insight-1',
-                    type: 'PROMPT_EFFECTIVENESS',
-                    confidence: 0.8,
-                    description: 'Test insight'
-                }]);
-
-            // Add experience to queue
-            await learningSystem.analysisQueue.enqueue('exp-1');
-
-            // Process experiences
-            const result = await learningSystem.processExperiences();
-
-            expect(result.experiencesProcessed).toBe(1);
-            expect(result.insightsGenerated).toBe(1);
-            expect(findExperiencesSpy).toHaveBeenCalled();
-            expect(saveInsightSpy).toHaveBeenCalled();
-        });
-    });
-
-    describe('Insight Retrieval', () => {
-        beforeEach(async () => {
-            await learningSystem.initialize();
-        });
-
-        test('should retrieve insights with filtering', async () => {
-            const mockInsights = [{
-                id: 'insight-1',
-                type: 'PROMPT_EFFECTIVENESS',
-                confidence: 0.8
-            }];
-
-            jest.spyOn(learningSystem.insightStore, 'findInsights')
-                .mockResolvedValue(mockInsights);
-
-            const filter = { type: 'PROMPT_EFFECTIVENESS', minConfidence: 0.7 };
-            const insights = await learningSystem.getLearnedInsights(filter);
-
-            expect(insights).toEqual(mockInsights);
-        });
-    });
-
-    describe('Periodic Analysis', () => {
-        beforeEach(async () => {
-            await learningSystem.initialize();
-        });
-
-        test('should start and stop periodic analysis', async () => {
-            const processSpy = jest.spyOn(learningSystem, 'processExperiences')
-                .mockResolvedValue({ experiencesProcessed: 0, insightsGenerated: 0 });
-
-            learningSystem.startPeriodicAnalysis();
-            expect(learningSystem.analysisTimer).toBeTruthy();
-
-            // Wait for one interval
-            await new Promise(resolve => setTimeout(resolve, mockConfig.periodicAnalysisIntervalMs + 100));
-
-            learningSystem.stopPeriodicAnalysis();
-            expect(learningSystem.analysisTimer).toBeNull();
-            expect(processSpy).toHaveBeenCalled();
-        });
-    });
-
-    describe('Shutdown', () => {
-        beforeEach(async () => {
-            await learningSystem.initialize();
-        });
-
-        test('should properly shutdown the system', async () => {
-            learningSystem.startPeriodicAnalysis();
-            await learningSystem.shutdown();
-
-            expect(learningSystem.isInitialized).toBe(false);
-            expect(learningSystem.analysisTimer).toBeNull();
+            const stats = await learningSystem.processExperiences();
+            
+            expect(stats.experiencesProcessed).toBeGreaterThan(0);
+            expect(stats.experiencesProcessed).toBe(3);
+            expect(stats.insightsGenerated).toBe(1);
+            expect(learningSystem.insightStore.saveInsight).toHaveBeenCalled();
         });
     });
 });

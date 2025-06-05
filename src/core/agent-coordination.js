@@ -8,6 +8,11 @@ import {
     generateFileLevelAnalysisPrompt,
     generateDependencyAnalysisPrompt
 } from './prompt-templates.js';
+import {
+    generateReplanUnderstandingPrompt,
+    generateReplanningPrompt,
+    generateReplanSubtasksPrompt
+} from './prompt-templates-replan.js';
 import { SandboxManager, SandboxError } from './sandbox-manager.js';
 import { ProjectPersistence, ProjectNotFoundError } from './project-persistence.js';
 import { PlatformError, CoordinationError } from './error-utils.js';
@@ -521,26 +526,129 @@ class AgentCoordinator {
     }
 
     /**
-     * Orchestrates the full analysis pipeline from user input to subtasks, including repository analysis if requested.
-     * @param {string} userInput - The user's original request/input
+     * Orchestrates a re-planning analysis after a failure.
      * @param {string} projectName - Name of the project
-     * @param {object} initialProjectContextData - Initial context and configuration
-     * @param {string} [initialProjectContextData.repositoryUrl] - Repository URL for analysis
-     * @param {boolean} [initialProjectContextData.performRepoAnalysis] - Whether to analyze repository
-     * @param {string} [initialProjectContextData.branch] - Repository branch to analyze
-     * @param {object} [initialProjectContextData.auth] - Repository authentication details
-     * @param {string[]} [initialProjectContextData.manifestFilePathsToAnalyze] - Manifest files to analyze
-     * @param {object} [initialProjectContextData.context] - Additional context data
-     * @param {boolean} [initialProjectContextData.forceReprocessUnderstanding] - Force reprocessing of understanding
-     * @returns {Promise<{
-     *   understanding: object,
-     *   plan: object,
-     *   subtasks: Array<object>
-     * }>}
-     * @throws {PlatformError} When analysis fails
+     * @param {object} failureContext - Context about the failure
+     * @param {string} failureContext.errorClassification - Type of error encountered
+     * @param {string} failureContext.failedSubtaskId - ID of failed subtask
+     * @param {string} failureContext.replanReason - Reason for re-planning
+     * @param {object} failureContext.previousPlan - Previous project plan
+     * @param {object} failureContext.previousUnderstanding - Previous understanding
+     * @param {string} failureContext.checkpointId - ID of last good state
+     * @param {object} options - Re-planning options
+     * @param {boolean} [options.forceFullReplan=false] - Force a complete re-plan
+     * @param {boolean} [options.preserveSuccessfulTasks=true] - Try to preserve successful work
+     * @returns {Promise<{understanding: object, plan: object, subtasks: Array<object>}>}
+     * @throws {PlatformError} When re-planning fails
      */
+    async orchestrateReplanningAnalysis(projectName, failureContext, options = {}) {
+        console.log(`[AgentCoordinator] Starting re-planning analysis for ${projectName} due to ${failureContext.errorClassification}`);
+
+        const {
+            previousPlan,
+            previousUnderstanding,
+            checkpointId
+        } = failureContext;
+
+        // Load project state from checkpoint if available
+        let projectState = null;
+        if (checkpointId && this.projectPersistence) {
+            try {
+                projectState = await this.projectPersistence.loadProjectCheckpoint(projectName, checkpointId);
+                console.log(`[AgentCoordinator] Loaded project state from checkpoint ${checkpointId}`);
+            } catch (error) {
+                console.warn(`[AgentCoordinator] Failed to load checkpoint ${checkpointId}: ${error.message}`);
+            }
+        }
+
+        // Get list of successful tasks
+        const successfulTaskIds = projectState?.successfulTasks || 
+            previousPlan?.subtasks?.filter(t => t.status === 'completed')?.map(t => t.id) || [];
+
+        // Re-evaluate understanding with failure context
+        const revisedUnderstanding = await this._callAIWithRetry(
+            generateReplanUnderstandingPrompt,
+            {
+                userInput: previousUnderstanding.original_request,
+                failureContext,
+                previousUnderstanding,
+                successfulTaskIds
+            },
+            'replan_understanding_phase'
+        );
+
+        // Generate new plan based on revised understanding
+        const revisedPlan = await this._callAIWithRetry(
+            generateReplanningPrompt,
+            {
+                revisedUnderstanding,
+                previousPlan,
+                failureContext,
+                successfulTasks: projectState?.successfulTasks || []
+            },
+            'replan_planning_phase'
+        );
+
+        // Break down into new subtasks
+        const revisedSubtasks = await this._callAIWithRetry(
+            generateReplanSubtasksPrompt,
+            {
+                revisedPlan,
+                failureContext,
+                previousSubtasks: previousPlan.subtasks,
+                successfulTaskIds
+            },
+            'replan_task_breakdown_phase'
+        );
+
+        // Validate the new plan
+        if (!Array.isArray(revisedSubtasks) || revisedSubtasks.length === 0) {
+            throw new PlatformError(
+                'Re-planning failed to generate valid subtasks',
+                'REPLAN_INVALID_SUBTASKS',
+                { projectName, failureContext },
+                null,
+                'CRITICAL'
+            );
+        }
+
+        // Store the re-plan attempt if persistence is available
+        if (this.projectPersistence) {
+            try {
+                await this.projectPersistence.storeReplanAttempt(projectName, {
+                    timestamp: new Date().toISOString(),
+                    failureContext,
+                    revisedUnderstanding,
+                    revisedPlan,
+                    revisedSubtasks
+                });
+            } catch (error) {
+                console.warn(`[AgentCoordinator] Failed to store re-plan attempt: ${error.message}`);
+            }
+        }
+
+        return {
+            understanding: revisedUnderstanding,
+            plan: revisedPlan,
+            subtasks: revisedSubtasks
+        };
+    }
+
     async orchestrateFullAnalysis(userInput, projectName, initialProjectContextData = {}) {
         console.log(`[AgentCoordinator] Orchestrating full analysis for project: ${projectName}`);
+
+        // Check if this is a re-planning attempt
+        if (initialProjectContextData.isReplanAttempt && initialProjectContextData.failureContext) {
+            console.log(`[AgentCoordinator] This is a re-planning attempt for ${projectName}`);
+            return this.orchestrateReplanningAnalysis(
+                projectName,
+                initialProjectContextData.failureContext,
+                {
+                    forceFullReplan: initialProjectContextData.forceFullReplan,
+                    preserveSuccessfulTasks: initialProjectContextData.preserveSuccessfulTasks !== false
+                }
+            );
+        }
 
         const pState = {
             understanding: null,
