@@ -23,14 +23,16 @@ class AgentCoordinator {
      * @param {ProjectPersistence} projectPersistence - Project persistence manager
      * @param {SandboxManager} sandboxManager - Sandbox environment manager
      * @param {ConfigManager} configManager - Configuration manager
+     * @param {LearningSystem} learningSystem - Learning system for experience logging
      */
-    constructor(vertexAIChatConfig, projectPersistence, sandboxManager, configManager) {
+    constructor(vertexAIChatConfig, projectPersistence, sandboxManager, configManager, learningSystem) {
         this.chatModel = new VertexAIChatModel(vertexAIChatConfig);
         this.projectPersistence = projectPersistence;
         this.sandboxManager = sandboxManager;
         this.configManager = configManager;
+        this.learningSystem = learningSystem;
         this.systemState = {};
-        console.log('[AgentCoordinator] Initialized with SandboxManager and ConfigManager.');
+        console.log('[AgentCoordinator] Initialized with SandboxManager, ConfigManager and LearningSystem.');
     }
 
     /**
@@ -75,9 +77,36 @@ class AgentCoordinator {
         let lastError;
 
         while (attempts <= maxRetries) {
+            const startTime = Date.now();
             try {
                 console.log(`[AgentCoordinator] Calling AI for ${operationName}, attempt ${attempts + 1}`);
                 const llmResponse = await this.chatModel.generateText(prompt, modelOptions);
+
+                // Log AI prompt execution experience
+                if (this.learningSystem) {
+                    await this.learningSystem.logExperience({
+                        type: 'AI_PROMPT_EXECUTION',
+                        context: {
+                            projectName: context.projectName,
+                            requestId: context.requestId,
+                            promptId: operationName,
+                            promptHash: prompt.substring(0, 100), // Simple truncation as hash
+                            modelName: this.chatModel.modelName || 'vertex-ai',
+                            modelParametersUsed: modelOptions
+                        },
+                        outcome: {
+                            status: 'SUCCESS',
+                            durationMs: Date.now() - startTime,
+                            metrics: {
+                                tokensUsed: {
+                                    input: prompt.length / 4, // Rough estimation
+                                    output: llmResponse.length / 4,
+                                    total: (prompt.length + llmResponse.length) / 4
+                                }
+                            }
+                        }
+                    }).catch(err => console.warn('[AgentCoordinator] Failed to log AI experience:', err));
+                }
                 const parsedResponse = this._parseLLMJsonResponse(llmResponse, operationName);
 
                 if (parsedResponse.error && parsedResponse.clarification_needed && attempts < maxRetries) {
@@ -92,6 +121,32 @@ class AgentCoordinator {
             } catch (error) {
                 lastError = error;
                 console.warn(`[AgentCoordinator] Attempt ${attempts + 1} for ${operationName} failed directly: ${error.message}`);
+
+                // Log failed AI prompt execution
+                if (this.learningSystem) {
+                    await this.learningSystem.logExperience({
+                        type: 'AI_PROMPT_EXECUTION',
+                        context: {
+                            projectName: context.projectName,
+                            requestId: context.requestId,
+                            promptId: operationName,
+                            promptHash: prompt.substring(0, 100),
+                            modelName: this.chatModel.modelName || 'vertex-ai',
+                            modelParametersUsed: modelOptions
+                        },
+                        outcome: {
+                            status: 'FAILURE',
+                            durationMs: Date.now() - startTime,
+                            error: {
+                                code: error.code || 'UNKNOWN_ERROR',
+                                message: error.message,
+                                severity: error.severity || 'UNKNOWN',
+                                stackPreview: error.stack?.split('\n').slice(0, 3).join('\n')
+                            }
+                        }
+                    }).catch(err => console.warn('[AgentCoordinator] Failed to log AI error experience:', err));
+                }
+
                 attempts++;
                 if (attempts > maxRetries || !(error instanceof PlatformError && error.severity === 'RETRYABLE_TRANSIENT')) {
                     throw lastError;

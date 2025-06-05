@@ -42,17 +42,21 @@ class SystemManager {
         this.agentCoordinator = new AgentCoordinator(
             vertexAIConf.chat || vertexAIConf,
             this.projectPersistence,
-            this.sandboxManager
+            this.sandboxManager,
+            this.configManager,
+            this.learningSystem
         );
+
+        this.learningSystem = new LearningSystem(learningSystemConfig);
 
         this.taskExecutor = new TaskExecutionSystem(
             vertexAIConf.code || vertexAIConf,
             vertexAIConf.codeChat || vertexAIConf,
             this.sandboxManager,
             this.projectPersistence,
-            this.configManager
+            this.configManager,
+            this.learningSystem
         );
-        this.learningSystem = new LearningSystem(learningSystemConfig);
 
         this.state = {
             isRunning: false,
@@ -137,9 +141,14 @@ class SystemManager {
         }
     }
 
-    async _runOperationalLoop() {
+async _runOperationalLoop() {
         if (!this.state.isRunning || this.mainTaskQueue.isEmpty()) {
             return;
+        }
+
+        // Ensure LearningSystem is initialized
+        if (!this.learningSystem.isInitialized) {
+            await this.learningSystem.initialize();
         }
         if (this.state.systemHealth.startsWith('ERROR_')) { // More specific check
             console.error(`[SystemManager] System in error state: ${this.state.systemHealth}. Halting further operations.`);
@@ -175,16 +184,65 @@ class SystemManager {
                 projectState.metadata.status = 'processing_analysis'; // Update status
                 this.activeProjects.set(request.projectName, projectState); // Save updated status
                 
-                const analysisResult = await this.agentCoordinator.orchestrateFullAnalysis(
-                    projectState.conversation.originalRequest,
-                    request.projectName,
-                    {
-                        context: projectState.context,
-                        forceReprocessUnderstanding: request.options?.forceReprocessUnderstanding || projectState.metadata.status === 'failed_needs_replan',
-                        forceReprocessPlan: request.options?.forceReprocessPlan || projectState.metadata.status === 'failed_needs_replan',
-                        forceReprocessTasks: request.options?.forceReprocessTasks || projectState.metadata.status === 'failed_needs_replan',
-                    }
-                );
+                const startTime = Date.now();
+                let analysisResult;
+                try {
+                    analysisResult = await this.agentCoordinator.orchestrateFullAnalysis(
+                        projectState.conversation.originalRequest,
+                        request.projectName,
+                        {
+                            context: projectState.context,
+                            forceReprocessUnderstanding: request.options?.forceReprocessUnderstanding || projectState.metadata.status === 'failed_needs_replan',
+                            forceReprocessPlan: request.options?.forceReprocessPlan || projectState.metadata.status === 'failed_needs_replan',
+                            forceReprocessTasks: request.options?.forceReprocessTasks || projectState.metadata.status === 'failed_needs_replan',
+                        }
+                    );
+
+                    // Log successful analysis experience
+                    await this.learningSystem.logExperience({
+                        type: 'PROJECT_ANALYSIS_ORCHESTRATION',
+                        context: {
+                            projectName: request.projectName,
+                            requestId: request.requestId,
+                            userInput: projectState.conversation.originalRequest
+                        },
+                        outcome: {
+                            status: 'SUCCESS',
+                            durationMs: Date.now() - startTime,
+                            artifacts: [
+                                {
+                                    type: 'project_understanding',
+                                    validationStatus: 'passed'
+                                },
+                                {
+                                    type: 'project_plan',
+                                    validationStatus: 'passed'
+                                }
+                            ]
+                        }
+                    });
+                } catch (analysisError) {
+                    // Log failed analysis experience
+                    await this.learningSystem.logExperience({
+                        type: 'PROJECT_ANALYSIS_ORCHESTRATION',
+                        context: {
+                            projectName: request.projectName,
+                            requestId: request.requestId,
+                            userInput: projectState.conversation.originalRequest
+                        },
+                        outcome: {
+                            status: 'FAILURE',
+                            durationMs: Date.now() - startTime,
+                            error: {
+                                code: analysisError.code || 'UNKNOWN_ERROR',
+                                message: analysisError.message,
+                                severity: analysisError.severity || 'CRITICAL',
+                                stackPreview: analysisError.stack?.split('\n').slice(0, 3).join('\n')
+                            }
+                        }
+                    });
+                    throw analysisError;
+                }
                 projectState.understanding = analysisResult.understanding;
                 projectState.plan = analysisResult.plan;
                 projectState.execution = {
@@ -258,11 +316,11 @@ class SystemManager {
         return projectState;
     }
 
-    async _processProjectSubtasks(projectName, projectState) { // Pass projectState directly
-        const subtasksToAttemptIds = [...projectState.execution.subtasksRemainingIds];
+    async _processProjectSubtasks(projectName, projectState) {
+        const remainingSubtaskIdsThisIteration = [...projectState.execution.subtasksRemainingIds];
 
-        for (const subtaskId of subtasksToAttemptIds) {
-            if (!this.state.isRunning) { console.log("[SystemManager] System stop requested during subtask processing."); return; }
+        for (const subtaskId of remainingSubtaskIdsThisIteration) {
+            if (!this.state.isRunning)  throw new PlatformError("System stop requested", "SYSTEM_STOP_REQUESTED", {projectName, subtaskId},null,"CRITICAL");
 
             const subtask = projectState.execution.subtasksFull.find(st => st.id === subtaskId);
             if (!subtask) {
@@ -271,92 +329,132 @@ class SystemManager {
                 continue;
             }
 
-            console.log(`[SystemManager] Starting subtask ${subtask.id}: ${subtask.title}`);
+            console.log(`[SystemManager] --> Processing subtask ${subtask.id}: ${subtask.title}`);
             projectState.execution.currentSubtaskId = subtask.id;
-            // Ensure attempt number is reset for a new subtask, or incremented for retry of *this* subtask
-            // This attempt refers to SystemManager level retries for the subtask, not TaskExecutor's internal debug attempts
-            let systemManagerSubtaskAttempt = projectState.execution.subtaskAttempts?.[subtaskId] || 0;
-            systemManagerSubtaskAttempt++;
-            projectState.execution.subtaskAttempts = { ...(projectState.execution.subtaskAttempts || {}), [subtaskId]: systemManagerSubtaskAttempt };
+            if (this.notificationService) this.notificationService.broadcastTaskUpdate(projectName, subtask, 'started');
 
+            let systemLevelSubtaskAttempt = (projectState.execution.subtaskAttempts[subtaskId] || 0) + 1;
+            projectState.execution.subtaskAttempts[subtaskId] = systemLevelSubtaskAttempt;
 
             try {
+                const startTime = Date.now();
                 const result = await this.taskExecutor.executeSubtask(
-                    subtask,
-                    projectName,
-                    projectState.context.files || {}
+                    subtask, projectName, projectState.context.files || {}
                 );
 
+                // Log subtask execution experience
+                await this.learningSystem.logExperience({
+                    type: 'SUBTASK_EXECUTION',
+                    context: {
+                        projectName,
+                        requestId: projectState.requestId,
+                        subtaskId: subtask.id,
+                        subtaskTitle: subtask.title,
+                        subtaskType: subtask.type,
+                        agentPersona: subtask.assigned_persona
+                    },
+                    outcome: {
+                        status: result.success ? 'SUCCESS' : 'FAILURE',
+                        durationMs: Date.now() - startTime,
+                        artifacts: result.artifacts ? Object.entries(result.artifacts).map(([path, _]) => ({
+                            type: 'code_file',
+                            path,
+                            validationStatus: 'passed'
+                        })) : []
+                    }
+                });
+
                 if (result.success) {
-                    console.log(`[SystemManager] Subtask ${subtask.id} completed successfully.`);
                     projectState.context.files = { ...(projectState.context.files || {}), ...result.artifacts };
                     projectState.execution.subtasksCompletedIds.push(subtask.id);
-                    projectState.execution.subtasksRemainingIds = projectState.execution.subtasksRemainingIds.filter(id => id !== subtask.id);
-                    delete projectState.execution.subtaskAttempts?.[subtaskId]; // Clear attempts on success
-                    projectState.metadata.status = 'processing_tasks'; // Still processing if more tasks
-                    await this._saveProjectCheckpoint(projectName, projectState, `subtask_${subtask.id}_complete`);
+                    projectState.execution.subtasksRemainingIds = projectState.execution.subtasksRemainingIds.filter(id => id !== subtaskId);
+                    delete projectState.execution.subtaskAttempts[subtaskId];
+                    projectState.execution.lastError = null;
+                    projectState.metadata.status = 'processing_tasks'; // Keep this status until all done
+                    await this._saveProjectCheckpoint(projectName, projectState, `subtask_${subtask.id}_success`);
+                    if (this.notificationService) this.notificationService.broadcastTaskUpdate(projectName, subtask, 'completed', { artifacts: Object.keys(result.artifacts || {}).length });
                 } else {
-                    const subtaskError = this._wrapAsPlatformError(result.error || new Error(`Subtask ${subtask.id} failed: No specific error details.`), {operation: 'executeSubtask', projectName, subtaskId:subtask.id}, 'RECOVERABLE_WITH_MODIFICATION');
-                    throw subtaskError; // Throw to trigger recovery logic below
+                    const errorFromExecutor = this._wrapAsPlatformError(
+                        result.error || new Error(`Subtask ${subtask.id} failed in TaskExecutor without specific error.`),
+                        {operation: 'TaskExecutor.executeSubtask', projectName, subtaskId, taskTitle: subtask.title},
+                        result.error instanceof PlatformError ? result.error.severity : 'RECOVERABLE_WITH_MODIFICATION'
+                    );
+                    throw errorFromExecutor; // Throw to outer catch in this function for centralized recovery decision
                 }
-            } catch (errorFromExecutorOrAbove) { // Catch errors from taskExecutor or if it re-threw a wrapped error
-                const wrappedSubtaskError = this._wrapAsPlatformError(errorFromExecutorOrAbove, {operation:'_processProjectSubtasks_inner_catch', projectName, subtaskId: subtask.id});
-                console.error(`[SystemManager] Error during execution of subtask ${subtask.id} (attempt ${systemManagerSubtaskAttempt}):`, wrappedSubtaskError);
+            } catch (errorCaught) { // Catches errors from taskExecutor.executeSubtask OR re-thrown errorFromExecutor
+                const subtaskProcessingError = this._wrapAsPlatformError(errorCaught, { operation:'_processSubtasks_catch_block', projectName, subtaskId, attempt: systemLevelSubtaskAttempt });
+                console.error(`[SystemManager] <|> Error during subtask ${subtask.id} (SysAttempt ${systemLevelSubtaskAttempt}):`, subtaskProcessingError.message);
                 
-                const operationContextForClassification = {
-                    projectName,
-                    subtaskId: subtask.id,
-                    currentSubtask: subtask,
-                    isOptionalTask: subtask.isOptional || false // Assume subtask might have this property
+                const operationContext = {
+                    projectName, subtaskId, currentSubtask: subtask,
+                    isOptionalTask: subtask.isOptional || this.configManager.get(`subtaskConfiguration.${subtask.type}.isOptional`, false)
                 };
-                const errorClassification = classifyError(wrappedSubtaskError, operationContextForClassification);
+                const errorClassification = classifyError(subtaskProcessingError, operationContext);
                 const recovery = determineRecoveryStrategy(
                     errorClassification,
-                    { projectName, currentSubtask: subtask, attemptNumber: systemManagerSubtaskAttempt, projectState },
+                    { projectName, currentSubtask: subtask, attemptNumber: systemLevelSubtaskAttempt, projectState },
                     this.configManager
                 );
 
-                console.log(`[SystemManager] For subtask ${subtask.id}, determined recovery: ${recovery.type}`);
-                projectState.execution.lastError = { ...errorClassification, recoveryAttempted: recovery.type };
+                console.log(`[SystemManager] <|> For subtask ${subtask.id}, Error: ${errorClassification.classifiedType} (${errorClassification.severity}), Suggested: ${errorClassification.suggestedAction}, Determined Recovery: ${recovery.type}`);
+                projectState.execution.lastError = { ...errorClassification, recoveryAttempted: recovery.type, details: subtaskProcessingError.message, originalErrorStack: subtaskProcessingError.originalError?.stack };
+                if (this.notificationService) this.notificationService.broadcastTaskUpdate(projectName, subtask, 'failed', { error: projectState.execution.lastError });
 
                 if (recovery.type === 'RETRY_AS_IS' || recovery.type === 'RETRY_WITH_PARAMS') {
-                    // Parameters for retry might be set in recovery.params (e.g., for TaskExecutor)
-                    // The subtask remains in subtasksRemainingIds. The current iteration of _processProjectSubtasks for *this* subtask ends.
-                    // The outer _runOperationalLoop will call _processProjectSubtasks again, which will re-attempt it.
-                    console.log(`[SystemManager] Subtask ${subtask.id} will be retried (attempt ${systemManagerSubtaskAttempt +1}) in next cycle. Delay: ${recovery.delayMs || 0}ms`);
-                    await this._saveProjectCheckpoint(projectName, projectState, `subtask_${subtask.id}_pending_retry`);
+                    projectState.metadata.status = 'subtask_pending_retry';
+                    console.log(`[SystemManager] <|> Subtask ${subtask.id} (attempt ${systemLevelSubtaskAttempt}) marked for retry. Next SystemManager loop will re-attempt. Delay: ${recovery.delayMs || 0}ms.`);
+                    // Subtask remains in `subtasksRemainingIds`. Increment its attempt count.
+                    await this._saveProjectCheckpoint(projectName, projectState, `subtask_${subtask.id}_attempt_${systemLevelSubtaskAttempt}_pending_retry`);
+                    // This 'return' exits _processProjectSubtasks. The main loop will decide if it re-runs _processProjectSubtasks for this project.
                     if(recovery.delayMs) await new Promise(r => setTimeout(r, recovery.delayMs));
-                    return; // Exit _processProjectSubtasks, main loop will recall it. This leads to one subtask retry per main loop.
-                            // For multiple retries within one main loop pass, this needs a nested while loop for the current subtask.
-                } else if (recovery.type === 'REPLAN_FROM_CHECKPOINT') {
-                    console.log(`[SystemManager] Triggering re-plan for project ${projectName} due to subtask ${subtask.id} failure.`);
+                    return; // Signal to _runOperationalLoop that this project's subtask processing for *this cycle* is pausing for retry.
+                } else if (recovery.type === 'SCHEDULE_REPLAN') { // Changed from REPLAN_FROM_CHECKPOINT
+                    console.log(`[SystemManager] <|> Triggering project re-plan for ${projectName} due to unrecoverable subtask ${subtask.id}.`);
                     projectState.metadata.status = 'failed_needs_replan';
-                    projectState.execution.replanReason = recovery.params?.replanReason || `Failure in subtask ${subtask.id}`;
-                    this.projectRetryAttempts.delete(projectName); // Reset project level retries for fresh plan
-                    // Clear remaining tasks as a new plan will come
-                    projectState.execution.subtasksRemainingIds = [];
-                    await this._saveProjectCheckpoint(projectName, projectState, `subtask_${subtask.id}_failed_replan`);
-                    // Signal the main loop that a replan is needed
-                    throw new CoordinationError("Re-plan required", "REPLAN_TRIGGERED", {projectName, subtaskId: subtask.id}, null, "CRITICAL");
-                } else if (recovery.type === 'SKIP_OPTIONAL') {
-                    console.warn(`[SystemManager] Skipping optional failed subtask ${subtask.id}.`);
-                    projectState.execution.subtasksCompletedIds.push(`${subtask.id} (skipped due to error)`);
-                    projectState.execution.subtasksRemainingIds = projectState.execution.subtasksRemainingIds.filter(id => id !== subtask.id);
-                    delete projectState.execution.subtaskAttempts?.[subtaskId];
-                    await this._saveProjectCheckpoint(projectName, projectState, `subtask_${subtask.id}_skipped`);
-                    // Continue to the next subtask in this loop
-                } else { // HALT_PROJECT
-                    projectState.metadata.status = 'failed_subtask_unrecoverable';
-                    await this._saveProjectCheckpoint(projectName, projectState, `subtask_${subtask.id}_failed_halt`);
-                    throw wrappedSubtaskError; // Propagate to halt processing for this project
+                    projectState.execution.replanReason = recovery.params?.replanReason || `Unrecoverable failure in subtask ${subtask.id}`;
+                    projectState.execution.subtasksRemainingIds = []; // New plan will be generated
+                    await this._saveProjectCheckpoint(projectName, projectState, `subtask_${subtask.id}_failed_triggering_replan`);
+                    // Let _runOperationalLoop handle the 'failed_needs_replan' status to initiate replan via AgentCoordinator
+                    throw new CoordinationError( // Throw to signal _runOperationalLoop to handle project-level replan
+                        projectState.execution.replanReason,
+                        "REPLAN_REQUIRED_BY_SUBTASK_FAILURE",
+                        { projectName, subtaskId, failedSubtaskTitle: subtask.title, recoveryParams: recovery.params },
+                        subtaskProcessingError,
+                        "CRITICAL"
+                    );
+                } else if (recovery.type === 'SKIP_OPTIONAL_TASK') {
+                    console.warn(`[SystemManager] <|> Skipping optional FAILED subtask ${subtask.id}.`);
+                    projectState.execution.subtasksCompletedIds.push(`${subtask.id} (skipped_after_error)`);
+                    projectState.execution.subtasksRemainingIds = projectState.execution.subtasksRemainingIds.filter(id => id !== subtaskId);
+                    delete projectState.execution.subtaskAttempts[subtaskId]; // Reset attempts as it's skipped
+                    projectState.metadata.status = 'processing_tasks'; // Continue with other tasks
+                    await this._saveProjectCheckpoint(projectName, projectState, `subtask_${subtask.id}_skipped_on_error`);
+                    // Continue to the next subtask in this 'for...of' loop
+                } else { // HALT_PROJECT_PROCESSING
+                    projectState.metadata.status = `failed_subtask_unrecoverable_halt_${subtaskId}`;
+                    await this._saveProjectCheckpoint(projectName, projectState, `subtask_${subtask.id}_halted`);
+                    throw new TaskOrchestrationError( // Throw to signal _runOperationalLoop
+                        `Unrecoverable failure processing subtask ${subtask.id} after ${systemLevelSubtaskAttempt} attempts. Project processing for this request will halt.`,
+                        'SUBTASK_PROCESSING_HALTED',
+                        { projectName, subtaskId, underlyingErrorMsg: subtaskProcessingError.message },
+                        subtaskProcessingError,
+                        'CRITICAL'
+                    );
                 }
             } finally {
-                // projectState.execution.currentSubtaskId = null; // Reset after subtask processing block
+                if (projectState.execution.currentSubtaskId === subtaskId &&
+                   (!projectState.execution.subtasksRemainingIds.includes(subtaskId) || projectState.metadata.status?.startsWith('failed_') || projectState.metadata.status === 'subtask_pending_retry')) {
+                    projectState.execution.currentSubtaskId = null;
+                }
             }
-        } // End for...of subtask loop
+        } // End for...of subtasks loop
 
-        if (projectState.execution.subtasksRemainingIds && projectState.execution.subtasksRemainingIds.length === 0) {
-             console.log(`[SystemManager] All subtasks processed for project ${projectName} in this iteration.`);
+        if (projectState.execution.subtasksRemainingIds && projectState.execution.subtasksRemainingIds.length === 0 && !projectState.metadata.status?.startsWith('failed_')) {
+             projectState.metadata.status = 'all_tasks_processed_successfully';
+             console.log(`[SystemManager] All subtasks for project ${projectName} successfully processed or skipped in this iteration.`);
+        } else if (projectState.execution.subtasksRemainingIds?.length > 0 && !projectState.metadata.status?.startsWith('failed_') && projectState.metadata.status !== 'subtask_pending_retry') {
+            // Still tasks remaining, but no immediate retry scheduled for the one just processed.
+            projectState.metadata.status = 'processing_tasks';
         }
     }
 
@@ -436,55 +534,93 @@ class SystemManager {
         }
     }
 
-   async _handleProjectLevelError(projectName, error, projectState, request) {
-    const classification = classifyError(error, { projectName });
-    const currentProjectAttempts = this.projectRetryAttempts.get(projectName) || 0;
+    async _handleProjectLevelError(projectName, error, projectState, request) {
+    if (!projectState) {
+        const defaultInput = request?.userInput || "Unknown initial request";
+        projectState = this.activeProjects.get(projectName) || {
+            metadata: { projectName, status: 'failed_unknown_state', created: new Date(), lastModified: new Date() },
+            execution: {}, context: {}, conversation: { originalRequest: defaultInput }
+        };
+        this.activeProjects.set(projectName, projectState);
+    }
 
-    // Use a more generic context for determineRecoveryStrategy for project-level errors
-    const recoveryContext = {
-        projectName,
-        attemptNumber: currentProjectAttempts,
-        projectState // Pass the actual project state
-    };
-    const recovery = determineRecoveryStrategy(classification, recoveryContext, this.configManager);
+    const errorClassification = classifyError(error, { projectName, isProjectLevelError: true });
+    
+    // Log project-level error recovery attempt
+    await this.learningSystem.logExperience({
+        type: 'ERROR_RECOVERY_ATTEMPT',
+        context: {
+            projectName,
+            requestId: request?.requestId,
+            errorClassification
+        },
+        outcome: {
+            status: 'IN_PROGRESS',
+            error: {
+                code: error.code || 'UNKNOWN_ERROR',
+                message: error.message,
+                severity: error.severity || 'CRITICAL',
+                stackPreview: error.stack?.split('\n').slice(0, 3).join('\n')
+            }
+        }
+    });
+    let projectSystemRetries = this.projectRetryAttempts.get(projectName) || 0;
 
-    console.error(`[SystemManager] Handling project-level error for ${projectName}. Classification: ${classification.severity}, Suggested: ${classification.suggestedAction}, Determined Recovery: ${recovery.type}`);
+    const recoveryContext = { projectName, attemptNumber: projectSystemRetries, projectState };
+    let recoveryStrategy = determineRecoveryStrategy(errorClassification, recoveryContext, this.configManager);
 
-    projectState.metadata.status = 'failed';
+    console.error(`[SystemManager] Handling PROJECT-LEVEL error for ${projectName}. Type: ${errorClassification.classifiedType}, Severity: ${errorClassification.severity}, Suggested: ${errorClassification.suggestedAction}, Determined Recovery: ${recoveryStrategy.type}, Project ReplanRetries: ${projectSystemRetries}`);
+
+    projectState.metadata.status = 'failed'; // Default, specific status if recovery applies
     projectState.execution.lastError = {
-        message: error.message, code: error.code, details: error.context,
+        message: error.message, code: error.code, context: error.context,
         stack: error.stack, timestamp: new Date().toISOString(),
-        classification: errorClassification, recoveryAttempted: recovery.type
+        classification: errorClassification, recoveryAttempted: recoveryStrategy.type
     };
     this.activeProjects.set(projectName, projectState);
 
-    if (recovery.type === 'REPLAN_FROM_CHECKPOINT' || (recovery.type === 'RETRY_AS_IS' && classification.severity === 'CRITICAL')) { // Treat critical retry as replan for safety
-        const maxProjectRetries = this.configManager.get('errorHandling.maxRetries.simple', 2);
-        if (currentProjectAttempts < maxProjectRetries) {
-            this.projectRetryAttempts.set(projectName, currentProjectAttempts + 1);
-            console.log(`[SystemManager] Project ${projectName} failed critically, attempting full re-plan (attempt ${currentProjectAttempts + 1}/${maxProjectRetries}).`);
-            // Re-enqueue the original request with flags to force full reprocessing
-            const retryOptions = {
-                ...(request.options || {}),
-                forceReprocessAnalysis: true,
-                forceReloadState: true, // Ensure it reloads from persistence to get checkpointed state if any
-                isRetry: true, // Mark as a system manager retry
-                originatingError: error.message
-            };
-             this.mainTaskQueue.enqueue({ ...request, options: retryOptions }); // Re-queue at the end
-             console.log(`[SystemManager] Re-queued request for ${projectName} for re-planning.`);
-        } else {
-            console.error(`[SystemManager] Max project retries (${maxProjectRetries}) reached for ${projectName}. Marking as terminally failed.`);
-            projectState.metadata.status = 'failed_terminal';
-             this.projectRetryAttempts.delete(projectName);
-        }
-    } else if (recovery.type === 'HALT_PROJECT') {
-        console.error(`[SystemManager] Unrecoverable error for project ${projectName}. Project processing halted.`);
-        projectState.metadata.status = 'failed_terminal';
-        this.projectRetryAttempts.delete(projectName);
+    // If the error itself was a trigger for replan (e.g. from _processSubtasks), it's already set
+    if (error.code === 'REPLAN_REQUIRED_BY_SUBTASK_FAILURE') {
+        recoveryStrategy.type = 'SCHEDULE_REPLAN'; // Force this strategy
     }
-    // Always save the error state
-    await this._saveProjectCheckpoint(projectName, projectState, `project_error_state_${projectState.metadata.status}`);
+
+    if (recoveryStrategy.type === 'SCHEDULE_REPLAN') {
+        const maxProjectReplanRetries = this.configManager.get('errorHandling.maxProjectRetries.replan', 1);
+        if (projectSystemRetries < maxProjectReplanRetries) {
+            this.projectRetryAttempts.set(projectName, projectSystemRetries + 1);
+
+            projectState.metadata.status = 'failed_needs_replan';
+            console.log(`[SystemManager] Project ${projectName} requires re-planning. This request will be re-evaluated with re-plan flags (Attempt ${projectSystemRetries + 1}/${maxProjectReplanRetries}).`);
+            // The original request object (peeked from queue) 'request' will be processed again in the next loop.
+            // Its options need to be updated to reflect that it's a replan.
+            if (request) {
+                request.options = {
+                    ...(request.options || {}),
+                    forceReprocessAnalysis: true, // This is the key for AgentCoordinator
+                    forceReloadState: true,       // Load from the last good checkpoint
+                    isSystemRetryAttempt: true,    // Indicate SystemManager is retrying the whole request
+                    failureContextForReplan: projectState.execution.lastError, // Pass failure context
+                    replanOptions: { preserveSuccessfulTasks: true, ...(recoveryStrategy.params || {}) } // Example replan option from strategy
+                };
+            } else {
+                console.error("[SystemManager] CRITICAL: Cannot set retry options as original request object from queue is unavailable in _handleProjectLevelError.");
+                projectState.metadata.status = 'failed_terminal_internal_error'; // Prevent infinite loop
+            }
+        } else {
+            console.error(`[SystemManager] Max project re-plan retries (${maxProjectReplanRetries}) reached for ${projectName}. Marking as terminally failed.`);
+            projectState.metadata.status = 'failed_terminal_replan_exhausted';
+            this.projectRetryAttempts.delete(projectName);
+            if (this.mainTaskQueue.peek()?.projectName === projectName) this.mainTaskQueue.dequeue();
+        }
+    } else { // Includes HALT_PROJECT_PROCESSING or other unhandled project-level recoveries
+        console.error(`[SystemManager] Unrecoverable project-level error for project ${projectName}, or recovery strategy leads to HALT. Project processing terminated for this request.`);
+        projectState.metadata.status = 'failed_terminal_unrecoverable';
+        this.projectRetryAttempts.delete(projectName);
+        if (this.mainTaskQueue.peek()?.projectName === projectName) this.mainTaskQueue.dequeue();
+    }
+
+    await this._saveProjectCheckpoint(projectName, projectState, `project_error_final_state_${projectState.metadata.status}`);
+    if (this.notificationService) this.notificationService.broadcastProjectStatus(projectState);
    }
 
     /**

@@ -23,16 +23,18 @@ class TaskExecutionSystem {
      * @param {SandboxManager} sandboxManager
      * @param {ProjectPersistence} [projectPersistence]
      * @param {ConfigurationManager} [configManager]
+     * @param {LearningSystem} [learningSystem] - Learning system for experience logging
      */
-    constructor(vertexAICodeConfig, vertexAICodeChatConfig, sandboxManager, projectPersistence, configManager) {
+    constructor(vertexAICodeConfig, vertexAICodeChatConfig, sandboxManager, projectPersistence, configManager, learningSystem) {
         this.codeModel = new VertexAICodeModel(vertexAICodeConfig);
         this.codeChatModel = new VertexAICodeChatModel(vertexAICodeChatConfig);
         this.sandboxManager = sandboxManager;
         this.projectPersistence = projectPersistence;
         this.configManager = configManager; // For accessing global configs like MAX_DEBUG_ATTEMPTS
+        this.learningSystem = learningSystem;
 
         this.activeExecutions = new Map(); // subtaskId -> { status, attempts, ... }
-        console.log('[TaskExecutionSystem] Initialized.');
+        console.log('[TaskExecutionSystem] Initialized with LearningSystem.');
     }
 
     _parseLLMJsonResponse(llmResponseText, operationName) {
@@ -103,10 +105,38 @@ class TaskExecutionSystem {
                         ? this.codeChatModel
                         : this.codeModel;
 
-                    const codeGenResponseText = await modelToUseForCodeGen.generateText(codeGenPrompt, {
+                    const startTime = Date.now();
+                    const modelOptions = {
                         temperature: this.configManager?.get(`vertexAI.code.${modelToUseForCodeGen === this.codeChatModel ? 'chat' : 'gen'}.temperature`, 0.2),
                         maxOutputTokens: this.configManager?.get(`vertexAI.code.maxOutputTokens`, 4096),
-                    });
+                    };
+                    const codeGenResponseText = await modelToUseForCodeGen.generateText(codeGenPrompt, modelOptions);
+
+                    // Log AI prompt execution
+                    if (this.learningSystem) {
+                        await this.learningSystem.logExperience({
+                            type: 'AI_PROMPT_EXECUTION',
+                            context: {
+                                projectName: subtask.projectName,
+                                subtaskId: subtask.id,
+                                promptId: `code_generation_${debugAttempt > 0 ? 'debug_attempt_' + debugAttempt : 'initial'}`,
+                                promptHash: codeGenPrompt.substring(0, 100),
+                                modelName: modelToUseForCodeGen === this.codeChatModel ? 'vertex-ai-code-chat' : 'vertex-ai-code',
+                                modelParametersUsed: modelOptions
+                            },
+                            outcome: {
+                                status: 'SUCCESS',
+                                durationMs: Date.now() - startTime,
+                                metrics: {
+                                    tokensUsed: {
+                                        input: codeGenPrompt.length / 4,
+                                        output: codeGenResponseText.length / 4,
+                                        total: (codeGenPrompt.length + codeGenResponseText.length) / 4
+                                    }
+                                }
+                            }
+                        }).catch(err => console.warn('[TaskExecutionSystem] Failed to log AI experience:', err));
+                    }
 
                     const { codeArtifacts: newOrModifiedCode, explanation: genExplanation } =
                         this._parseCodeFilesFromLLMResponse(codeGenResponseText, subtask);
