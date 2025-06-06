@@ -1,0 +1,66 @@
+version: '3.8'
+
+services:
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d
+      - ./nginx/ssl:/etc/nginx/ssl
+      - ./nginx/www:/var/www/html
+    depends_on:
+      - backend
+      - frontend
+    networks:
+      - ai_agent_network
+
+  backend:
+    build:
+      context: ../
+      dockerfile: deployment/backend/Dockerfile
+    environment:
+      - NODE_ENV=production
+      - DB_HOST=postgres
+      - REDIS_HOST=redis
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - ai_agent_network
+
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: ../deployment/frontend/Dockerfile
+    depends_on:
+      - backend
+    networks:
+      - ai_agent_network
+
+  postgres:
+    image: postgres:14-alpine
+    environment:
+      - POSTGRES_USER=aiagent
+      - POSTGRES_PASSWORD=secure_password
+      - POSTGRES_DB=aiagent_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - ai_agent_network
+
+  redis:
+    image: redis:alpine
+    volumes:
+      - redis_data:/data
+    networks:
+      - ai_agent_network
+
+networks:
+  ai_agent_network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
