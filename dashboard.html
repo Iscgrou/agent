@@ -1,0 +1,620 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Development Dashboard</title>
+    <style>
+        :root {
+            /* Core Theme Colors */
+            --primary: #2D3748;
+            --secondary: #4A5568;
+            --accent: #4299E1;
+            --success: #48BB78;
+            --warning: #ECC94B;
+            --error: #F56565;
+            --bg-dark: #1A202C;
+            --text-light: #F7FAFC;
+            
+            /* Additional UI Colors */
+            --surface-1: #2D3748;
+            --surface-2: #1A202C;
+            --border: #4A5568;
+            --text-primary: #F7FAFC;
+            --text-secondary: #A0AEC0;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+            background: var(--bg-dark);
+            color: var(--text-light);
+            height: 100vh;
+            display: grid;
+            grid-template-rows: auto 1fr;
+        }
+
+        /* Header Styles */
+        .header {
+            background: var(--surface-1);
+            padding: 1rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 2rem;
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            font-size: 1.25rem;
+            font-weight: bold;
+            color: var(--accent);
+        }
+
+        .nav-tabs {
+            display: flex;
+            gap: 1rem;
+        }
+
+        .nav-tab {
+            padding: 0.5rem 1rem;
+            color: var(--text-secondary);
+            border-radius: 0.5rem;
+            cursor: pointer;
+        }
+
+        .nav-tab.active {
+            background: var(--accent);
+            color: var(--text-light);
+        }
+
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        /* Main Layout */
+        .main-container {
+            display: grid;
+            grid-template-columns: 250px 1fr 300px;
+            gap: 1px;
+            background: var(--border);
+            overflow: hidden;
+        }
+
+        /* Sidebar Navigation */
+        .sidebar {
+            background: var(--surface-1);
+            padding: 1rem;
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+
+        .sidebar-section {
+            border-bottom: 1px solid var(--border);
+            padding-bottom: 1rem;
+        }
+
+        .sidebar-title {
+            color: var(--text-secondary);
+            font-size: 0.875rem;
+            margin-bottom: 0.5rem;
+        }
+
+        /* Project Explorer */
+        .project-explorer {
+            flex: 1;
+            overflow-y: auto;
+        }
+
+        .file-tree {
+            font-size: 0.875rem;
+        }
+
+        .file-tree-item {
+            padding: 0.25rem 0;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            cursor: pointer;
+        }
+
+        /* Main Content Area */
+        .content {
+            background: var(--surface-2);
+            display: grid;
+            grid-template-rows: 1fr auto;
+        }
+
+        /* Chat Interface */
+        .chat-container {
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .chat-header {
+            padding: 1rem;
+            background: var(--surface-1);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .chat-messages {
+            flex: 1;
+            padding: 1rem;
+            overflow-y: auto;
+        }
+
+        .message {
+            margin-bottom: 1rem;
+            max-width: 80%;
+        }
+
+        .message.user {
+            margin-left: auto;
+            background: var(--accent);
+            padding: 1rem;
+            border-radius: 1rem 1rem 0 1rem;
+        }
+
+        .message.ai {
+            background: var(--surface-1);
+            padding: 1rem;
+            border-radius: 1rem 1rem 1rem 0;
+        }
+
+        .code-block {
+            background: var(--surface-1);
+            padding: 1rem;
+            border-radius: 0.5rem;
+            margin: 0.5rem 0;
+            font-family: 'Courier New', Courier, monospace;
+            position: relative;
+        }
+
+        .code-actions {
+            position: absolute;
+            top: 0.5rem;
+            right: 0.5rem;
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        .action-button {
+            background: var(--accent);
+            border: none;
+            color: white;
+            padding: 0.25rem 0.5rem;
+            border-radius: 0.25rem;
+            cursor: pointer;
+            font-size: 0.875rem;
+        }
+
+        /* Input Area */
+        .input-container {
+            padding: 1rem;
+            background: var(--surface-1);
+            border-top: 1px solid var(--border);
+        }
+
+        .input-wrapper {
+            display: flex;
+            gap: 1rem;
+            align-items: flex-end;
+        }
+
+        .input-area {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+
+        .input-toolbar {
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        .toolbar-button {
+            padding: 0.25rem;
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            cursor: pointer;
+        }
+
+        .input-field {
+            background: var(--surface-2);
+            border: 1px solid var(--border);
+            border-radius: 0.5rem;
+            padding: 0.75rem;
+            color: var(--text-light);
+            resize: none;
+            min-height: 2.5rem;
+            max-height: 150px;
+        }
+
+        /* Right Panel */
+        .right-panel {
+            background: var(--surface-1);
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+            padding: 1rem;
+        }
+
+        .panel-section {
+            background: var(--surface-2);
+            border-radius: 0.5rem;
+            padding: 1rem;
+        }
+
+        .section-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+        }
+
+        .section-title {
+            font-weight: 600;
+            color: var(--accent);
+        }
+
+        /* Preview Section */
+        .preview-frame {
+            width: 100%;
+            height: 200px;
+            background: white;
+            border-radius: 0.5rem;
+            margin-bottom: 1rem;
+        }
+
+        /* Terminal Section */
+        .terminal {
+            background: black;
+            padding: 1rem;
+            border-radius: 0.5rem;
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 0.875rem;
+            color: #A0AEC0;
+        }
+
+        /* Status Section */
+        .status-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 0.5rem;
+        }
+
+        .status-item {
+            background: var(--surface-1);
+            padding: 0.75rem;
+            border-radius: 0.5rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.25rem;
+        }
+
+        .status-label {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+        }
+
+        .status-value {
+            font-size: 1rem;
+            color: var(--text-light);
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .status-indicator {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+        }
+
+        .status-indicator.active {
+            background: var(--success);
+        }
+
+        .status-indicator.warning {
+            background: var(--warning);
+        }
+
+        /* Progress Section */
+        .progress-list {
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+        }
+
+        .progress-item {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .progress-icon {
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            background: var(--accent);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.875rem;
+        }
+
+        .progress-info {
+            flex: 1;
+        }
+
+        .progress-title {
+            font-size: 0.875rem;
+            margin-bottom: 0.25rem;
+        }
+
+        .progress-bar {
+            height: 4px;
+            background: var(--surface-1);
+            border-radius: 2px;
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: var(--accent);
+            width: var(--progress, 0%);
+            transition: width 0.3s ease;
+        }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <div class="header-left">
+            <div class="logo">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M20 7L12 3L4 7M20 7L12 11M20 7V17L12 21M12 11L4 7M12 11V21M4 7V17L12 21"></path>
+                </svg>
+                AI Development Dashboard
+            </div>
+            <nav class="nav-tabs">
+                <div class="nav-tab active">Development</div>
+                <div class="nav-tab">Testing</div>
+                <div class="nav-tab">Deployment</div>
+            </nav>
+        </div>
+        <div class="header-right">
+            <button class="action-button">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M12 5v14M5 12h14"></path>
+                </svg>
+                New Project
+            </button>
+            <button style="background: none; border: none; color: white; cursor: pointer;">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"></path>
+                </svg>
+            </button>
+            <div style="width: 32px; height: 32px; background: var(--accent); border-radius: 50%;"></div>
+        </div>
+    </header>
+
+    <main class="main-container">
+        <!-- Left Sidebar -->
+        <aside class="sidebar">
+            <div class="sidebar-section">
+                <div class="sidebar-title">PROJECT</div>
+                <div class="project-explorer">
+                    <div class="file-tree">
+                        <div class="file-tree-item">
+                            📁 src
+                        </div>
+                        <div style="padding-left: 1.5rem">
+                            <div class="file-tree-item">📄 index.js</div>
+                            <div class="file-tree-item">📄 styles.css</div>
+                        </div>
+                        <div class="file-tree-item">
+                            📁 public
+                        </div>
+                        <div style="padding-left: 1.5rem">
+                            <div class="file-tree-item">📄 index.html</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="sidebar-section">
+                <div class="sidebar-title">DEVELOPMENT TOOLS</div>
+                <div class="file-tree">
+                    <div class="file-tree-item">🔧 Dependencies</div>
+                    <div class="file-tree-item">📦 Build Tools</div>
+                    <div class="file-tree-item">🔍 Testing Suite</div>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <section class="content">
+            <div class="chat-container">
+                <div class="chat-header">
+                    <div class="section-title">AI Assistant</div>
+                </div>
+                <div class="chat-messages">
+                    <div class="message ai">
+                        Hello! I'm your AI coding assistant. I can help you with:
+                        <ul style="margin-top: 0.5rem; margin-left: 1.5rem;">
+                            <li>Writing and debugging code</li>
+                            <li>Project planning and architecture</li>
+                            <li>Testing and optimization</li>
+                            <li>Deployment automation</li>
+                        </ul>
+                    </div>
+                    <div class="message user">
+                        Create a new React project with TypeScript
+                    </div>
+                    <div class="message ai">
+                        I'll help you set up a React + TypeScript project. First, let's create the project structure:
+                        <div class="code-block">
+                            <div class="code-actions">
+                                <button class="action-button">Copy</button>
+                                <button class="action-button">Run</button>
+                            </div>
+                            <pre>npx create-react-app my-app --template typescript</pre>
+                        </div>
+                        This will create a new project with:
+                        <ul style="margin-top: 0.5rem; margin-left: 1.5rem;">
+                            <li>React 18</li>
+                            <li>TypeScript configuration</li>
+                            <li>Testing setup with Jest</li>
+                            <li>Development server</li>
+                        </ul>
+                    </div>
+                </div>
+                <div class="input-container">
+                    <div class="input-wrapper">
+                        <div class="input-area">
+                            <div class="input-toolbar">
+                                <button class="toolbar-button">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+                                    </svg>
+                                </button>
+                                <button class="toolbar-button">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0-11V3"></path>
+                                    </svg>
+                                </button>
+                            </div>
+                            <textarea class="input-field" placeholder="Type your message or press Ctrl + B to use voice input..."></textarea>
+                        </div>
+                        <button class="action-button">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"></path>
+                            </svg>
+                            Send
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Right Panel -->
+        <aside class="right-panel">
+            <!-- Preview Section -->
+            <div class="panel-section">
+                <div class="section-header">
+                    <div class="section-title">Preview</div>
+                    <button class="action-button">Refresh</button>
+                </div>
+                <div class="preview-frame"></div>
+            </div>
+
+            <!-- Terminal Section -->
+            <div class="panel-section">
+                <div class="section-header">
+                    <div class="section-title">Terminal</div>
+                    <button class="action-button">Clear</button>
+                </div>
+                <div class="terminal">
+                    > npm start
+                    Starting development server...
+                    Compiled successfully!
+                </div>
+            </div>
+
+            <!-- Status Section -->
+            <div class="panel-section">
+                <div class="section-header">
+                    <div class="section-title">System Status</div>
+                </div>
+                <div class="status-grid">
+                    <div class="status-item">
+                        <div class="status-label">Server</div>
+                        <div class="status-value">
+                            <div class="status-indicator active"></div>
+                            Running
+                        </div>
+                    </div>
+                    <div class="status-item">
+                        <div class="status-label">Memory</div>
+                        <div class="status-value">
+                            <div class="status-indicator warning"></div>
+                            512MB
+                        </div>
+                    </div>
+                    <div class="status-item">
+                        <div class="status-label">CPU</div>
+                        <div class="status-value">45%</div>
+                    </div>
+                    <div class="status-item">
+                        <div class="status-label">Storage</div>
+                        <div class="status-value">2.1GB</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Progress Section -->
+            <div class="panel-section">
+                <div class="section-header">
+                    <div class="section-title">Development Progress</div>
+                </div>
+                <div class="progress-list">
+                    <div class="progress-item">
+                        <div class="progress-icon">1</div>
+                        <div class="progress-info">
+                            <div class="progress-title">Project Setup</div>
+                            <div class="progress-bar">
+                                <div class="progress-fill" style="--progress: 100%"></div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="progress-item">
+                        <div class="progress-icon">2</div>
+                        <div class="progress-info">
+                            <div class="progress-title">Development</div>
+                            <div class="progress-bar">
+                                <div class="progress-fill" style="--progress: 60%"></div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="progress-item">
+                        <div class="progress-icon">3</div>
+                        <div class="progress-info">
+                            <div class="progress-title">Testing</div>
+                            <div class="progress-bar">
+                                <div class="progress-fill" style="--progress: 30%"></div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="progress-item">
+                        <div class="progress-icon">4</div>
+                        <div class="progress-info">
+                            <div class="progress-title">Deployment</div>
+                            <div class="progress-bar">
+                                <div class="progress-fill" style="--progress: 0%"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </aside>
+    </main>
+</body>
+</html>

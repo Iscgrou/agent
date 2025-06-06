@@ -1,0 +1,241 @@
+{
+    "theme": {
+        "mode": "auto",
+        "colors": {
+            "primary": {
+                "50": "#EBF8FF",
+                "100": "#BEE3F8",
+                "200": "#90CDF4",
+                "300": "#63B3ED",
+                "400": "#4299E1",
+                "500": "#3182CE",
+                "600": "#2B6CB0",
+                "700": "#2C5282",
+                "800": "#2A4365",
+                "900": "#1A365D"
+            },
+            "surface": {
+                "50": "#F7FAFC",
+                "100": "#EDF2F7",
+                "200": "#E2E8F0",
+                "300": "#CBD5E0",
+                "400": "#A0AEC0",
+                "500": "#718096",
+                "600": "#4A5568",
+                "700": "#2D3748",
+                "800": "#1A202C",
+                "900": "#171923"
+            },
+            "semantic": {
+                "success": "#48BB78",
+                "warning": "#ECC94B",
+                "error": "#F56565",
+                "info": "#4299E1"
+            }
+        }
+    },
+    "layout": {
+        "sidebar": {
+            "width": "280px",
+            "collapsible": true,
+            "defaultCollapsed": false,
+            "sections": [
+                {
+                    "id": "development",
+                    "title": "Development",
+                    "icon": "code",
+                    "items": ["dashboard", "projects", "editor"]
+                },
+                {
+                    "id": "ai-system",
+                    "title": "AI System",
+                    "icon": "brain",
+                    "items": ["agents", "training", "analytics"]
+                },
+                {
+                    "id": "deployment",
+                    "title": "Deployment",
+                    "icon": "cloud",
+                    "items": ["environments", "security", "logs"]
+                }
+            ]
+        },
+        "header": {
+            "height": "64px",
+            "sticky": true,
+            "showBreadcrumbs": true,
+            "actions": ["newProject", "settings", "profile"]
+        },
+        "content": {
+            "maxWidth": "1440px",
+            "padding": "2rem",
+            "gridColumns": {
+                "sm": 1,
+                "md": 2,
+                "lg": 3
+            }
+        }
+    },
+    "features": {
+        "development": {
+            "enabled": true,
+            "codeEditor": {
+                "theme": "vs-dark",
+                "fontSize": 14,
+                "tabSize": 2,
+                "autoSave": true,
+                "formatOnSave": true,
+                "livePreview": true,
+                "extensions": ["typescript", "python", "java"]
+            },
+            "fileExplorer": {
+                "showHidden": false,
+                "sortBy": "name",
+                "groupFolders": true,
+                "filters": [".git", "node_modules", "__pycache__"]
+            },
+            "terminal": {
+                "shell": "bash",
+                "fontSize": 14,
+                "maxHistory": 1000
+            }
+        },
+        "aiSystem": {
+            "enabled": true,
+            "agents": {
+                "maxConcurrent": 4,
+                "autoScale": true,
+                "roles": [
+                    {
+                        "id": "frontend",
+                        "name": "Frontend Developer",
+                        "capabilities": ["react", "vue", "angular"]
+                    },
+                    {
+                        "id": "backend",
+                        "name": "Backend Developer",
+                        "capabilities": ["node", "python", "java"]
+                    },
+                    {
+                        "id": "devops",
+                        "name": "DevOps Engineer",
+                        "capabilities": ["docker", "kubernetes", "terraform"]
+                    },
+                    {
+                        "id": "qa",
+                        "name": "QA Engineer",
+                        "capabilities": ["testing", "automation", "performance"]
+                    }
+                ]
+            },
+            "training": {
+                "autoSchedule": true,
+                "maxBatchSize": 32,
+                "saveCheckpoints": true,
+                "metrics": ["accuracy", "performance", "resourceUsage"]
+            },
+            "monitoring": {
+                "refreshInterval": 5000,
+                "retentionPeriod": "7d",
+                "alerts": {
+                    "enabled": true,
+                    "channels": ["email", "slack"]
+                }
+            }
+        },
+        "deployment": {
+            "enabled": true,
+            "environments": ["development", "staging", "production"],
+            "providers": {
+                "kubernetes": {
+                    "enabled": true,
+                    "autoScaling": true,
+                    "monitoring": true
+                },
+                "cloudRun": {
+                    "enabled": true,
+                    "region": "us-central1"
+                },
+                "docker": {
+                    "enabled": true,
+                    "registry": "gcr.io"
+                }
+            },
+            "security": {
+                "scanning": {
+                    "enabled": true,
+                    "schedule": "daily"
+                },
+                "compliance": {
+                    "standards": ["SOC2", "GDPR"],
+                    "autoRemediation": true
+                }
+            }
+        }
+    },
+    "integration": {
+        "github": {
+            "enabled": true,
+            "autoSync": true,
+            "branch": "main"
+        },
+        "vertexAI": {
+            "enabled": true,
+            "region": "us-central1",
+            "projectId": "ai-platform-dev",
+            "chat": {
+                "model": "gemini-pro",
+                "maxOutputTokens": 1024,
+                "temperature": 0.2,
+                "topP": 0.8,
+                "topK": 40
+            },
+            "code": {
+                "model": "code-bison",
+                "maxOutputTokens": 2048,
+                "temperature": 0.2,
+                "topP": 0.95,
+                "topK": 40
+            },
+            "codeChat": {
+                "model": "codechat-bison",
+                "maxOutputTokens": 2048,
+                "temperature": 0.3,
+                "topP": 0.95,
+                "topK": 40
+            }
+        },
+        "sandbox": {
+            "enabled": true,
+            "rootPath": "/tmp/ai-platform-sandbox",
+            "maxExecutionTime": 30000,
+            "maxConcurrentExecutions": 4,
+            "cleanup": {
+                "enabled": true,
+                "interval": 3600000,
+                "maxAge": 86400000
+            },
+            "security": {
+                "isolationType": "container",
+                "resourceLimits": {
+                    "cpu": "1",
+                    "memory": "1Gi",
+                    "storage": "1Gi"
+                },
+                "allowedCommands": [
+                    "npm",
+                    "node",
+                    "python",
+                    "pip",
+                    "git"
+                ]
+            }
+        },
+        "monitoring": {
+            "datadog": {
+                "enabled": true,
+                "metrics": ["system", "application", "sandbox", "vertexAI"]
+            }
+        }
+    }
+}

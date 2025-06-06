@@ -1,0 +1,674 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Development Platform</title>
+    <style>
+        /* Core Theme */
+        :root {
+            --primary: #2D3748;
+            --secondary: #4A5568;
+            --accent: #4299E1;
+            --success: #48BB78;
+            --warning: #ECC94B;
+            --error: #F56565;
+            --info: #63B3ED;
+            --bg-dark: #1A202C;
+            --surface-1: #2D3748;
+            --surface-2: #1A202C;
+            --border: #4A5568;
+            --text-primary: #F7FAFC;
+            --text-secondary: #A0AEC0;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg-dark);
+            color: var(--text-primary);
+            height: 100vh;
+            display: grid;
+            grid-template-rows: auto 1fr;
+        }
+
+        /* Header */
+        .header {
+            background: var(--surface-1);
+            padding: 1rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .platform-title {
+            font-size: 1.25rem;
+            font-weight: bold;
+            color: var(--accent);
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .user-controls {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        /* Main Layout */
+        .main-container {
+            display: grid;
+            grid-template-columns: 250px 1fr 300px;
+            gap: 1px;
+            background: var(--border);
+            height: calc(100vh - 64px);
+        }
+
+        /* Left Panel - Project & Agents */
+        .left-panel {
+            background: var(--surface-1);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .panel-section {
+            padding: 1rem;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .section-title {
+            color: var(--text-secondary);
+            font-size: 0.875rem;
+            font-weight: 500;
+            margin-bottom: 1rem;
+        }
+
+        /* Agent Status Section */
+        .agent-list {
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+        }
+
+        .agent-card {
+            background: var(--surface-2);
+            padding: 0.75rem;
+            border-radius: 0.5rem;
+            border: 1px solid var(--border);
+        }
+
+        .agent-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 0.5rem;
+        }
+
+        .agent-name {
+            font-weight: 500;
+            color: var(--accent);
+        }
+
+        .agent-status {
+            font-size: 0.75rem;
+            padding: 0.25rem 0.5rem;
+            border-radius: 1rem;
+            background: var(--success);
+        }
+
+        .agent-status.idle {
+            background: var(--warning);
+        }
+
+        .agent-role {
+            font-size: 0.875rem;
+            color: var(--text-secondary);
+        }
+
+        /* Center Panel - Main Workspace */
+        .center-panel {
+            background: var(--surface-2);
+            display: grid;
+            grid-template-rows: auto 1fr auto;
+            overflow: hidden;
+        }
+
+        .workspace-tabs {
+            background: var(--surface-1);
+            padding: 0.5rem 1rem;
+            display: flex;
+            gap: 1rem;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .tab {
+            padding: 0.5rem 1rem;
+            border-radius: 0.25rem;
+            cursor: pointer;
+            color: var(--text-secondary);
+        }
+
+        .tab.active {
+            background: var(--accent);
+            color: var(--text-primary);
+        }
+
+        .workspace-content {
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        /* Code Editor Area */
+        .editor-container {
+            display: flex;
+            flex-direction: column;
+            flex: 1;
+            overflow: hidden;
+        }
+
+        .editor-header {
+            padding: 0.5rem;
+            background: var(--surface-1);
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .file-path {
+            font-family: monospace;
+            color: var(--text-secondary);
+        }
+
+        .editor-actions {
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        .action-button {
+            padding: 0.25rem 0.75rem;
+            border-radius: 0.25rem;
+            border: none;
+            background: var(--accent);
+            color: white;
+            cursor: pointer;
+            font-size: 0.875rem;
+            display: flex;
+            align-items: center;
+            gap: 0.25rem;
+        }
+
+        .code-area {
+            flex: 1;
+            padding: 1rem;
+            background: var(--surface-2);
+            font-family: 'Courier New', monospace;
+            overflow: auto;
+        }
+
+        /* Sandbox Controls */
+        .sandbox-controls {
+            padding: 1rem;
+            background: var(--surface-1);
+            border-top: 1px solid var(--border);
+        }
+
+        .control-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .environment-selector {
+            display: flex;
+            gap: 0.5rem;
+            align-items: center;
+        }
+
+        .env-select {
+            background: var(--surface-2);
+            border: 1px solid var(--border);
+            color: var(--text-primary);
+            padding: 0.25rem 0.5rem;
+            border-radius: 0.25rem;
+        }
+
+        /* Right Panel - System Status */
+        .right-panel {
+            background: var(--surface-1);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .status-section {
+            padding: 1rem;
+            border-bottom: 1px solid var(--border);
+        }
+
+        /* Resource Monitoring */
+        .resource-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 0.75rem;
+        }
+
+        .resource-card {
+            background: var(--surface-2);
+            padding: 0.75rem;
+            border-radius: 0.5rem;
+            border: 1px solid var(--border);
+        }
+
+        .resource-label {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            margin-bottom: 0.25rem;
+        }
+
+        .resource-value {
+            font-size: 1.25rem;
+            font-weight: 500;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .status-indicator {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+        }
+
+        .status-indicator.healthy {
+            background: var(--success);
+        }
+
+        .status-indicator.warning {
+            background: var(--warning);
+        }
+
+        /* Progress Tracking */
+        .progress-list {
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+
+        .progress-item {
+            background: var(--surface-2);
+            padding: 0.75rem;
+            border-radius: 0.5rem;
+            border: 1px solid var(--border);
+        }
+
+        .progress-header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 0.5rem;
+        }
+
+        .progress-title {
+            font-weight: 500;
+        }
+
+        .progress-status {
+            font-size: 0.875rem;
+            color: var(--accent);
+        }
+
+        .progress-bar {
+            height: 4px;
+            background: var(--surface-1);
+            border-radius: 2px;
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: var(--accent);
+            width: var(--progress, 0%);
+            transition: width 0.3s ease;
+        }
+
+        /* Deployment Section */
+        .deployment-options {
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+        }
+
+        .deploy-target {
+            background: var(--surface-2);
+            padding: 0.75rem;
+            border-radius: 0.5rem;
+            border: 1px solid var(--border);
+            cursor: pointer;
+            transition: border-color 0.2s;
+        }
+
+        .deploy-target:hover {
+            border-color: var(--accent);
+        }
+
+        .target-header {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .target-icon {
+            width: 24px;
+            height: 24px;
+            background: var(--accent);
+            border-radius: 0.25rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .target-name {
+            font-weight: 500;
+        }
+
+        .target-description {
+            font-size: 0.875rem;
+            color: var(--text-secondary);
+        }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <div class="platform-title">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M20 7L12 3L4 7M20 7L12 11M20 7V17L12 21M12 11L4 7M12 11V21M4 7V17L12 21"></path>
+            </svg>
+            AI Development Platform
+        </div>
+        <div class="user-controls">
+            <button class="action-button">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M12 5v14M5 12h14"></path>
+                </svg>
+                New Project
+            </button>
+            <div style="width: 32px; height: 32px; background: var(--accent); border-radius: 50%;"></div>
+        </div>
+    </header>
+
+    <main class="main-container">
+        <!-- Left Panel -->
+        <aside class="left-panel">
+            <!-- Project Section -->
+            <div class="panel-section">
+                <div class="section-title">PROJECT</div>
+                <div class="agent-list">
+                    <div class="agent-card">
+                        <div class="agent-header">
+                            <span class="agent-name">Project Manager</span>
+                            <span class="agent-status">Active</span>
+                        </div>
+                        <div class="agent-role">Coordinating development workflow</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Agent Status -->
+            <div class="panel-section">
+                <div class="section-title">AI AGENTS</div>
+                <div class="agent-list">
+                    <div class="agent-card">
+                        <div class="agent-header">
+                            <span class="agent-name">Frontend Developer</span>
+                            <span class="agent-status">Active</span>
+                        </div>
+                        <div class="agent-role">Building UI components</div>
+                    </div>
+                    <div class="agent-card">
+                        <div class="agent-header">
+                            <span class="agent-name">Backend Developer</span>
+                            <span class="agent-status idle">Idle</span>
+                        </div>
+                        <div class="agent-role">API implementation</div>
+                    </div>
+                    <div class="agent-card">
+                        <div class="agent-header">
+                            <span class="agent-name">QA Engineer</span>
+                            <span class="agent-status idle">Idle</span>
+                        </div>
+                        <div class="agent-role">Testing and validation</div>
+                    </div>
+                    <div class="agent-card">
+                        <div class="agent-header">
+                            <span class="agent-name">DevOps Engineer</span>
+                            <span class="agent-status idle">Idle</span>
+                        </div>
+                        <div class="agent-role">Deployment automation</div>
+                    </div>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Center Panel -->
+        <section class="center-panel">
+            <div class="workspace-tabs">
+                <div class="tab active">Development</div>
+                <div class="tab">Testing</div>
+                <div class="tab">Deployment</div>
+            </div>
+
+            <div class="workspace-content">
+                <div class="editor-container">
+                    <div class="editor-header">
+                        <span class="file-path">src/components/TodoList.tsx</span>
+                        <div class="editor-actions">
+                            <button class="action-button">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                                </svg>
+                                Save
+                            </button>
+                            <button class="action-button">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M5 3l14 9-14 9V3z"></path>
+                                </svg>
+                                Run
+                            </button>
+                        </div>
+                    </div>
+                    <div class="code-area">
+                        <pre><code>import React, { useState } from 'react';
+
+interface Todo {
+    id: number;
+    text: string;
+    completed: boolean;
+}
+
+export const TodoList: React.FC = () => {
+    const [todos, setTodos] = useState<Todo[]>([]);
+    const [input, setInput] = useState('');
+
+    const addTodo = () => {
+        if (input.trim()) {
+            setTodos([...todos, {
+                id: Date.now(),
+                text: input.trim(),
+                completed: false
+            }]);
+            setInput('');
+        }
+    };
+
+    return (
+        <div className="todo-list">
+            <input
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                placeholder="Add a todo"
+            />
+            <button onClick={addTodo}>Add</button>
+            <ul>
+                {todos.map(todo => (
+                    <li key={todo.id}>{todo.text}</li>
+                ))}
+            </ul>
+        </div>
+    );
+};</code></pre>
+                    </div>
+                </div>
+
+                <div class="sandbox-controls">
+                    <div class="control-row">
+                        <div class="environment-selector">
+                            <label>Environment:</label>
+                            <select class="env-select">
+                                <option>Development</option>
+                                <option>Testing</option>
+                                <option>Production</option>
+                            </select>
+                        </div>
+                        <button class="action-button">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M5 12h14M12 5l7 7-7 7"></path>
+                            </svg>
+                            Deploy
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Right Panel -->
+        <aside class="right-panel">
+            <!-- System Resources -->
+            <div class="status-section">
+                <div class="section-title">SYSTEM RESOURCES</div>
+                <div class="resource-grid">
+                    <div class="resource-card">
+                        <div class="resource-label">CPU Usage</div>
+                        <div class="resource-value">
+                            <div class="status-indicator healthy"></div>
+                            45%
+                        </div>
+                    </div>
+                    <div class="resource-card">
+                        <div class="resource-label">Memory</div>
+                        <div class="resource-value">
+                            <div class="status-indicator warning"></div>
+                            3.8GB
+                        </div>
+                    </div>
+                    <div class="resource-card">
+                        <div class="resource-label">Storage</div>
+                        <div class="resource-value">
+                            <div class="status-indicator healthy"></div>
+                            2.1GB
+                        </div>
+                    </div>
+                    <div class="resource-card">
+                        <div class="resource-label">Network</div>
+                        <div class="resource-value">
+                            <div class="status-indicator healthy"></div>
+                            125MB/s
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Development Progress -->
+            <div class="status-section">
+                <div class="section-title">DEVELOPMENT PROGRESS</div>
+                <div class="progress-list">
+                    <div class="progress-item">
+                        <div class="progress-header">
+                            <span class="progress-title">Project Setup</span>
+                            <span class="progress-status">Complete</span>
+                        </div>
+                        <div class="progress-bar">
+                            <div class="progress-fill" style="--progress: 100%"></div>
+                        </div>
+                    </div>
+                    <div class="progress-item">
+                        <div class="progress-header">
+                            <span class="progress-title">Frontend Development</span>
+                            <span class="progress-status">In Progress</span>
+                        </div>
+                        <div class="progress-bar">
+                            <div class="progress-fill" style="--progress: 60%"></div>
+                        </div>
+                    </div>
+                    <div class="progress-item">
+                        <div class="progress-header">
+                            <span class="progress-title">Backend Development</span>
+                            <span class="progress-status">Pending</span>
+                        </div>
+                        <div class="progress-bar">
+                            <div class="progress-fill" style="--progress: 0%"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Deployment Options -->
+            <div class="status-section">
+                <div class="section-title">DEPLOYMENT TARGETS</div>
+                <div class="deployment-options">
+                    <div class="deploy-target">
+                        <div class="target-header">
+                            <div class="target-icon">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+                                    <path d="M22 4L12 14.01l-3-3"></path>
+                                </svg>
+                            </div>
+                            <span class="target-name">Cloud Run</span>
+                        </div>
+                        <div class="target-description">Serverless container platform</div>
+                    </div>
+                    <div class="deploy-target">
+                        <div class="target-header">
+                            <div class="target-icon">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
+                                </svg>
+                            </div>
+                            <span class="target-name">Kubernetes</span>
+                        </div>
+                        <div class="target-description">Container orchestration</div>
+                    </div>
+                    <div class="deploy-target">
+                        <div class="target-header">
+                            <div class="target-icon">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"></rect>
+                                    <line x1="7" y1="2" x2="7" y2="22"></line>
+                                    <line x1="17" y1="2" x2="17" y2="22"></line>
+                                    <line x1="2" y1="12" x2="22" y2="12"></line>
+                                    <line x1="2" y1="7" x2="7" y2="7"></line>
+                                    <line x1="2" y1="17" x2="7" y2="17"></line>
+                                    <line x1="17" y1="17" x2="22" y2="17"></line>
+                                    <line x1="17" y1="7" x2="22" y2="7"></line>
+                                </svg>
+                            </div>
+                            <span class="target-name">Docker</span>
+                        </div>
+                        <div class="target-description">Container deployment</div>
+                    </div>
+                </div>
+            </div>
+        </aside>
+    </main>
+</body>
+</html>

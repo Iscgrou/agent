@@ -1,0 +1,549 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Development Platform - Modular Dashboard</title>
+    <style>
+        /* Core Theme System - Easily Configurable */
+        :root {
+            /* Primary Colors - Customizable through settings */
+            --primary-50: #EBF8FF;
+            --primary-100: #BEE3F8;
+            --primary-200: #90CDF4;
+            --primary-300: #63B3ED;
+            --primary-400: #4299E1;
+            --primary-500: #3182CE;
+            --primary-600: #2B6CB0;
+            --primary-700: #2C5282;
+            --primary-800: #2A4365;
+            --primary-900: #1A365D;
+
+            /* Surface Colors */
+            --surface-50: #F7FAFC;
+            --surface-100: #EDF2F7;
+            --surface-200: #E2E8F0;
+            --surface-300: #CBD5E0;
+            --surface-400: #A0AEC0;
+            --surface-500: #718096;
+            --surface-600: #4A5568;
+            --surface-700: #2D3748;
+            --surface-800: #1A202C;
+            --surface-900: #171923;
+
+            /* Semantic Colors */
+            --success: #48BB78;
+            --warning: #ECC94B;
+            --error: #F56565;
+            --info: #4299E1;
+
+            /* UI Properties */
+            --radius-sm: 0.25rem;
+            --radius-md: 0.375rem;
+            --radius-lg: 0.5rem;
+            --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+            --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+        }
+
+        /* Dark Theme - Automatically applied based on system preference */
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg-primary: var(--surface-800);
+                --bg-secondary: var(--surface-700);
+                --text-primary: var(--surface-100);
+                --text-secondary: var(--surface-300);
+                --border-color: var(--surface-600);
+            }
+        }
+
+        /* Light Theme */
+        @media (prefers-color-scheme: light) {
+            :root {
+                --bg-primary: var(--surface-100);
+                --bg-secondary: var(--surface-50);
+                --text-primary: var(--surface-900);
+                --text-secondary: var(--surface-600);
+                --border-color: var(--surface-300);
+            }
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            line-height: 1.5;
+        }
+
+        /* Layout System */
+        .app-container {
+            display: grid;
+            grid-template-rows: auto 1fr;
+            min-height: 100vh;
+        }
+
+        /* Header Component */
+        .header {
+            background: var(--bg-secondary);
+            padding: 1rem;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .header-brand {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .header-title {
+            font-size: 1.25rem;
+            font-weight: 600;
+            color: var(--primary-400);
+        }
+
+        /* Main Layout */
+        .main-layout {
+            display: grid;
+            grid-template-columns: auto 1fr;
+            height: calc(100vh - 64px); /* Adjust based on header height */
+        }
+
+        /* Navigation Component */
+        .nav-sidebar {
+            width: 280px;
+            background: var(--bg-secondary);
+            border-right: 1px solid var(--border-color);
+            padding: 1rem;
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+
+        .nav-group {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+
+        .nav-group-title {
+            font-size: 0.875rem;
+            font-weight: 600;
+            color: var(--text-secondary);
+            padding: 0.5rem;
+        }
+
+        .nav-item {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            padding: 0.75rem;
+            border-radius: var(--radius-md);
+            color: var(--text-primary);
+            text-decoration: none;
+            transition: background-color 0.2s;
+        }
+
+        .nav-item:hover {
+            background: var(--surface-600);
+        }
+
+        .nav-item.active {
+            background: var(--primary-600);
+            color: white;
+        }
+
+        /* Main Content Area */
+        .main-content {
+            padding: 2rem;
+            overflow-y: auto;
+        }
+
+        /* Card Component */
+        .card {
+            background: var(--bg-secondary);
+            border-radius: var(--radius-lg);
+            border: 1px solid var(--border-color);
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+        }
+
+        .card-title {
+            font-size: 1.25rem;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        /* Grid Layout */
+        .grid {
+            display: grid;
+            gap: 1.5rem;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+        }
+
+        /* Button Component */
+        .button {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.5rem 1rem;
+            border-radius: var(--radius-md);
+            font-size: 0.875rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+            border: none;
+        }
+
+        .button-primary {
+            background: var(--primary-500);
+            color: white;
+        }
+
+        .button-primary:hover {
+            background: var(--primary-600);
+        }
+
+        /* Form Components */
+        .form-group {
+            margin-bottom: 1rem;
+        }
+
+        .form-label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-size: 0.875rem;
+            color: var(--text-secondary);
+        }
+
+        .form-input {
+            width: 100%;
+            padding: 0.5rem;
+            border-radius: var(--radius-md);
+            border: 1px solid var(--border-color);
+            background: var(--bg-primary);
+            color: var(--text-primary);
+        }
+
+        /* Status Indicators */
+        .status {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.25rem 0.75rem;
+            border-radius: var(--radius-full);
+            font-size: 0.875rem;
+        }
+
+        .status-success {
+            background: var(--success);
+            color: white;
+        }
+
+        .status-warning {
+            background: var(--warning);
+            color: var(--surface-900);
+        }
+
+        .status-error {
+            background: var(--error);
+            color: white;
+        }
+
+        /* Progress Component */
+        .progress {
+            width: 100%;
+            height: 0.5rem;
+            background: var(--surface-200);
+            border-radius: var(--radius-full);
+            overflow: hidden;
+        }
+
+        .progress-bar {
+            height: 100%;
+            background: var(--primary-500);
+            transition: width 0.3s ease;
+        }
+
+        /* Tooltip Component */
+        .tooltip {
+            position: relative;
+            display: inline-block;
+        }
+
+        .tooltip:hover::after {
+            content: attr(data-tooltip);
+            position: absolute;
+            bottom: 100%;
+            left: 50%;
+            transform: translateX(-50%);
+            padding: 0.5rem;
+            background: var(--surface-700);
+            color: white;
+            border-radius: var(--radius-sm);
+            font-size: 0.75rem;
+            white-space: nowrap;
+        }
+
+        /* Modal Component */
+        .modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+
+        .modal-content {
+            background: var(--bg-primary);
+            border-radius: var(--radius-lg);
+            padding: 2rem;
+            max-width: 500px;
+            width: 90%;
+        }
+
+        /* Notification Component */
+        .notification {
+            position: fixed;
+            bottom: 1rem;
+            right: 1rem;
+            padding: 1rem;
+            border-radius: var(--radius-md);
+            background: var(--surface-700);
+            color: white;
+            box-shadow: var(--shadow-lg);
+            z-index: 1000;
+        }
+
+        /* Responsive Design */
+        @media (max-width: 768px) {
+            .main-layout {
+                grid-template-columns: 1fr;
+            }
+
+            .nav-sidebar {
+                display: none;
+            }
+
+            .main-content {
+                padding: 1rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="app-container">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-brand">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M20 7L12 3L4 7M20 7L12 11M20 7V17L12 21M12 11L4 7M12 11V21M4 7V17L12 21"></path>
+                </svg>
+                <span class="header-title">AI Development Platform</span>
+            </div>
+            <div class="header-actions">
+                <button class="button button-primary">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12 5v14M5 12h14"></path>
+                    </svg>
+                    New Project
+                </button>
+            </div>
+        </header>
+
+        <!-- Main Layout -->
+        <div class="main-layout">
+            <!-- Navigation Sidebar -->
+            <nav class="nav-sidebar">
+                <div class="nav-group">
+                    <div class="nav-group-title">DEVELOPMENT</div>
+                    <a href="#" class="nav-item active">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M3 3h18v18H3z"></path>
+                        </svg>
+                        Dashboard
+                    </a>
+                    <a href="#" class="nav-item">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                        </svg>
+                        Projects
+                    </a>
+                    <a href="#" class="nav-item">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
+                        </svg>
+                        Code Editor
+                    </a>
+                </div>
+
+                <div class="nav-group">
+                    <div class="nav-group-title">AI SYSTEM</div>
+                    <a href="#" class="nav-item">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm0 18a8 8 0 1 1 8-8 8 8 0 0 1-8 8z"></path>
+                            <path d="M12 6a6 6 0 1 0 6 6 6 6 0 0 0-6-6zm0 10a4 4 0 1 1 4-4 4 4 0 0 1-4 4z"></path>
+                        </svg>
+                        Agents
+                    </a>
+                    <a href="#" class="nav-item">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M21 12a9 9 0 1 1-9-9 9 9 0 0 1 9 9z"></path>
+                            <path d="M12 8v4l3 3"></path>
+                        </svg>
+                        Training
+                    </a>
+                    <a href="#" class="nav-item">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M22 12h-4l-3 9L9 3l-3 9H2"></path>
+                        </svg>
+                        Analytics
+                    </a>
+                </div>
+
+                <div class="nav-group">
+                    <div class="nav-group-title">DEPLOYMENT</div>
+                    <a href="#" class="nav-item">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+                            <path d="M22 4L12 14.01l-3-3"></path>
+                        </svg>
+                        Environments
+                    </a>
+                    <a href="#" class="nav-item">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+                        </svg>
+                        Security
+                    </a>
+                    <a href="#" class="nav-item">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path>
+                        </svg>
+                        Logs
+                    </a>
+                </div>
+            </nav>
+
+            <!-- Main Content -->
+            <main class="main-content">
+                <!-- Project Overview -->
+                <div class="card">
+                    <div class="card-header">
+                        <h2 class="card-title">Project Overview</h2>
+                        <div class="status status-success">Active</div>
+                    </div>
+                    <div class="grid">
+                        <div class="form-group">
+                            <label class="form-label">Project Name</label>
+                            <input type="text" class="form-input" value="AI Development Platform" />
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Environment</label>
+                            <select class="form-input">
+                                <option>Development</option>
+                                <option>Staging</option>
+                                <option>Production</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- AI Agents Status -->
+                <div class="card">
+                    <div class="card-header">
+                        <h2 class="card-title">AI Agents</h2>
+                        <button class="button button-primary">Configure Agents</button>
+                    </div>
+                    <div class="grid">
+                        <div class="card">
+                            <div class="card-header">
+                                <h3 class="card-title">Frontend Developer</h3>
+                                <div class="status status-success">Active</div>
+                            </div>
+                            <div class="progress">
+                                <div class="progress-bar" style="width: 75%"></div>
+                            </div>
+                        </div>
+                        <div class="card">
+                            <div class="card-header">
+                                <h3 class="card-title">Backend Developer</h3>
+                                <div class="status status-warning">Training</div>
+                            </div>
+                            <div class="progress">
+                                <div class="progress-bar" style="width: 45%"></div>
+                            </div>
+                        </div>
+                        <div class="card">
+                            <div class="card-header">
+                                <h3 class="card-title">DevOps Engineer</h3>
+                                <div class="status status-success">Active</div>
+                            </div>
+                            <div class="progress">
+                                <div class="progress-bar" style="width: 90%"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- System Resources -->
+                <div class="card">
+                    <div class="card-header">
+                        <h2 class="card-title">System Resources</h2>
+                        <button class="button button-primary">View Details</button>
+                    </div>
+                    <div class="grid">
+                        <div class="card">
+                            <div class="card-header">
+                                <h3 class="card-title">CPU Usage</h3>
+                                <div class="status status-success">Normal</div>
+                            </div>
+                            <div class="progress">
+                                <div class="progress-bar" style="width: 45%"></div>
+                            </div>
+                        </div>
+                        <div class="card">
+                            <div class="card-header">
+                                <h3 class="card-title">Memory</h3>
+                                <div class="status status-warning">High</div>
+                            </div>
+                            <div class="progress">
+                                <div class="progress-bar" style="width: 85%"></div>
+                            </div>
+                        </div>
+                        <div class="card">
+                            <div class="card-header">
+                                <h3 class="card-title">Storage</h3>
+                                <div class="status status-success">Normal</div>
+                            </div>
+                            <div class="progress">
+                                <div class="progress-bar" style="width: 30%"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </main>
+        </div>
+    </div>
+</body>
+</html>

@@ -1,0 +1,14 @@
+appName: AI Platform Default YAML
+port: 3000
+featureFlags:
+  newDashboard: false
+  enableLogging: true
+vertexAI:
+  chatModel:
+    name: gemini-pro
+    temperature: 0.7
+database:
+  host: localhost_yaml
+  port: 5432
+  credentials:
+    user: ${DB_USER}  # Example of potential environment variable substitution
